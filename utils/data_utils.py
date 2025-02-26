@@ -28,7 +28,7 @@ def read_saved_results(out_path):
                 l = json.loads(line)
                 preds.append(l)
                 i+=1
-                print(i)
+                # print(i)
     return preds
 
 

@@ -1,79 +1,324 @@
+import __init__
 import torch
 import torch.nn.functional as F
-from vllm import LLM, SamplingParams
+from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2ForCausalLM
 import json
+from utils.data_utils import load_data,save_all_results, read_saved_results, save_results
+from utils.utils import *
+from tqdm import tqdm
+import time
+import argparse
 
-def load_dataset(filepath):
-    """通用加载数据集方法"""
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+accept_prob = 0.01
+system_prompt = "Your role as an assistant involves thoroughly exploring questions through a systematic long \
+        thinking process before providing the final precise and accurate solutions. This requires \
+        engaging in a comprehensive cycle of analysis, summarizing, exploration, reassessment, reflection, \
+        backtracing, and iteration to develop well-considered thinking process. \
+        Please structure your response into two main sections: Thought and Solution. \
+        In the Thought section, detail your reasoning process using the specified format: \
+        <|begin_of_thought|> {thought with steps separated with '\n\n'} \
+        <|end_of_thought|> \
+        Each step should include detailed considerations such as analisying questions, summarizing \
+        relevant findings, brainstorming new ideas, verifying the accuracy of the current steps, refining \
+        any errors, and revisiting previous steps. \
+        In the Solution section, based on various attempts, explorations, and reflections from the Thought \
+        section, systematically present the final solution that you deem correct. The solution should \
+        remain a logical, accurate, concise expression style and detail necessary step needed to reach the \
+        conclusion, formatted as follows: \
+        <|begin_of_solution|> \
+        {final formatted, precise, and clear solution} \
+        <|end_of_solution|> \
+        Now, try to solve the following question through the above guidelines:" 
 
-def speculative_decoding(target_model, speculative_model, tokenizer, question, system_prompt, max_tokens=50, k=3):
-    """
-    通用 Speculative Decoding 方法:
-    - speculative_model 预测 K 个 token
-    - target_model 计算概率，并进行拒绝采样
-    记录哪些 token 被 target_model 修复，以及它们的位置。
-    """
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": question}
-    ]
-    
-    # **Step 1: Speculative Model 生成 K 个 token**
-    speculative_sampling_params = SamplingParams(max_tokens=k, temperature=0.7)
-    speculative_output = speculative_model.chat(messages, speculative_sampling_params)
-    speculative_tokens = tokenizer(speculative_output["choices"][0]["message"]["content"], return_tensors="pt").input_ids.tolist()[0]
-    
-    # **Step 2: 计算大模型的 token 概率**
-    target_input_ids = tokenizer(question, return_tensors="pt").input_ids.tolist()[0] + speculative_tokens
-    target_sampling_params = SamplingParams(max_tokens=len(speculative_tokens))
-    target_output = target_model.chat(messages, target_sampling_params)
-    target_tokens = tokenizer(target_output["choices"][0]["message"]["content"], return_tensors="pt").input_ids.tolist()[0]
-    
-    # **Step 3: 进行拒绝采样并记录修复情况**
-    accepted_tokens = []
-    corrected_tokens = []
-    for i in range(len(speculative_tokens)):
-        speculative_token = speculative_tokens[i]
-        target_pred_token = target_tokens[i] if i < len(target_tokens) else speculative_token
-        
-        accept_prob = 0.5  # 这里假设一个固定接受概率，实际实现时应基于 logits 计算
-        if torch.rand(1).item() < accept_prob:
+def load_train_data(choose_data_name):
+    split = 'train' if choose_data_name not in ['MATH500'] else 'test'
+    choose_data_name = dataset_names[choose_data_name]
+    choose_data = load_data(choose_data_name, 'huggingface')
+    choose_data = choose_data[split]
+    if 'MATH500' in choose_data_name or 'aime' in choose_data_name:
+        new_column_names = {"problem": "question"}
+    choose_data = choose_data.rename_columns(new_column_names)
+    return choose_data
+
+
+def choose_prob_all(target_probs, accepted_tokens, speculative_tokens, target_pred_tokens, corrected_tokens, prompt_len):
+    global accept_prob
+    sorted_probs, sorted_indices = torch.sort(target_probs[0], dim=-1, descending=True)
+    mask = sorted_probs >= accept_prob
+    for i, (idx, p, m) in enumerate(zip(sorted_indices, sorted_probs, mask)):
+        speculative_token, target_pred_token = speculative_tokens[i], target_pred_tokens[i]
+        filtered_probs, filtered_indices = p[m], idx[m].tolist() 
+        if len(filtered_indices) == 0 or speculative_token in filtered_indices or speculative_token == target_pred_token:
             accepted_tokens.append(speculative_token)
         else:
             accepted_tokens.append(target_pred_token)
-            corrected_tokens.append({"position": i, "speculative": tokenizer.decode([speculative_token]), "target": tokenizer.decode([target_pred_token])})  # 记录修复的 token 及其位置
-            break  
-    
-    return tokenizer.decode(accepted_tokens, skip_special_tokens=True), corrected_tokens
+            corrected_tokens.append({
+                "position": len(accepted_tokens) - 1 - prompt_len,
+                "speculative": tokenizer.decode([speculative_token]),
+                "target": tokenizer.decode([target_pred_token])
+            })
+            print(f'change from {corrected_tokens[-1]['speculative']} to {corrected_tokens[-1]['target']} at {corrected_tokens[-1]['position']}')
+            break
 
-def generate_answers(target_model, speculative_model, tokenizer, dataset, system_prompt, output_file):
-    """针对数据集批量生成答案，并保存修复的 token"""
-    results = []
-    for sample in dataset:
-        question = sample["question"]
-        response_text, corrected_tokens = speculative_decoding(target_model, speculative_model, tokenizer, question, system_prompt)
+# def choose_prob(target_probs, accepted_tokens, speculative_token, target_pred_token, corrected_tokens):
+#     speculative_prob, target_prob = target_probs[:, speculative_token].item(), target_probs[:,target_pred_token].item()
+#     accept_prob = speculative_prob / target_prob
+#     if torch.rand(1).item() < accept_prob:
+#         accepted_tokens.append(speculative_token)
+#         return False
+#     else:
+#         accepted_tokens.append(target_pred_token)
+#         corrected_tokens.append({
+#             "position": len(accepted_tokens) - 1,
+#             "speculative": tokenizer.decode([speculative_token]),
+#             "target": tokenizer.decode([target_pred_token])
+#         })
+#         return True
+
+def decoding_chat(target_model, tokenizer, question, system_prompt, max_tokens=32*1024, temperature=0.7):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # 构造聊天消息
+    messages = [
+        # {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + question + ' <think>\n'}
+    ]
+    input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to(device)
+    target_past_key_values = None
+    accepted_tokens = input_ids.tolist()[0]
+    speculative_input_ids = torch.tensor([accepted_tokens[:-1]], device=device)
+    with torch.no_grad():
+        target_outputs = target_model(
+            input_ids=speculative_input_ids,
+            past_key_values=target_past_key_values,  # ✅ 仅计算新增 token，复用 KV Cache
+            return_dict=True,
+            output_hidden_states=False,
+            output_attentions=False,
+            use_cache=True,  # ✅ 维护 target_model 的 KV Cache
+        )
+    target_past_key_values = target_outputs.past_key_values
+
+    current_ids = torch.tensor([[accepted_tokens[-1]]], device=device)
+    while len(accepted_tokens) - len(input_ids[0]) < max_tokens:
+        with torch.no_grad():
+            outputs = target_model(
+                input_ids=current_ids,
+                past_key_values=target_past_key_values,  # ✅ 仅计算新增 token，复用 KV Cache
+                return_dict=True,
+                output_hidden_states=False,
+                output_attentions=False,
+                use_cache=True,  # ✅ 维护 target_model 的 KV Cache
+            )
+        next_token_logits = outputs.logits[:, -1, :]
+        # 采样下一个token
+        if temperature > 0:
+            probs = torch.softmax(next_token_logits / temperature, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+        else:
+            next_token = torch.argmax(next_token_logits, dim=-1)
+        
+        accepted_tokens.append(next_token.item())
+        target_past_key_values = outputs.past_key_values
+        current_ids = next_token.unsqueeze(0)
+ 
+        # 终止条件检查
+        if tokenizer.eos_token_id == accepted_tokens[-1]:
+            break
+
+    # 解码最终结果
+    output_text = tokenizer.decode(accepted_tokens[len(input_ids[0]):], skip_special_tokens=True)
+    return output_text, [], len(accepted_tokens[len(input_ids[0]):])
+
+
+def speculative_decoding_chat(target_model, speculative_model, tokenizer, question, system_prompt, max_tokens=32*1024, k=5, temperature=0.7):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # 构造聊天消息
+    messages = [
+        # {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + question + ' <think>\n'}
+    ]
+    input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to(device)
+    
+    accepted_tokens = input_ids.tolist()[0]
+    prompt_len = len(accepted_tokens)
+    target_past_key_values = None  # target_model的KV Cache
+    speculative_past_key_values = None  # speculative_model的KV Cache
+    corrected_tokens = []
+
+    def get_k_v_cache(speculative_input_ids, target_past_key_values, speculative_past_key_values):
+        with torch.no_grad():
+            target_outputs = target_model(
+                input_ids=speculative_input_ids,
+                past_key_values=target_past_key_values,  # ✅ 仅计算新增 token，复用 KV Cache
+                return_dict=True,
+                output_hidden_states=False,
+                output_attentions=False,
+                use_cache=True,  # ✅ 维护 target_model 的 KV Cache
+            )
+            target_past_key_values = target_outputs.past_key_values
+            speculative_outputs= speculative_model(
+                input_ids=speculative_input_ids,
+                past_key_values=speculative_past_key_values,  # ✅ 仅计算新增 token，复用 KV Cache
+                return_dict=True,
+                output_hidden_states=False,
+                output_attentions=False,
+                use_cache=True,  # ✅ 维护 target_model 的 KV Cache
+            )
+            speculative_past_key_values = speculative_outputs.past_key_values
+        return target_past_key_values, speculative_past_key_values
+            
+    speculative_input_ids = torch.tensor([accepted_tokens[:-1]], device=device)
+    target_past_key_values, speculative_past_key_values = get_k_v_cache(speculative_input_ids, target_past_key_values, speculative_past_key_values)
+
+    while len(accepted_tokens) - len(input_ids[0]) < max_tokens:
+        speculative_tokens = []
+        # ========== Step 1: 用speculative_model生成K个候选 ==========
+        current_ids = torch.tensor([[accepted_tokens[-1]]], device=device)
+        for _ in range(k):
+            with torch.no_grad():
+                outputs = speculative_model(
+                    input_ids=current_ids,
+                    past_key_values=speculative_past_key_values,  # ✅ 仅计算新增 token，复用 KV Cache
+                    return_dict=True,
+                    output_hidden_states=False,
+                    output_attentions=False,
+                    use_cache=True,  # ✅ 维护 target_model 的 KV Cache
+                )
+            next_token_logits = outputs.logits[:, -1, :]
+            # 采样下一个token
+            if temperature > 0:
+                probs = torch.softmax(next_token_logits / temperature, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+            else:
+                next_token = torch.argmax(next_token_logits, dim=-1)
+            
+            speculative_tokens.append(next_token.item())
+            speculative_past_key_values = outputs.past_key_values
+            current_ids = next_token.unsqueeze(0)
+       
+        speculative_input_ids = torch.tensor([[accepted_tokens[-1]]+speculative_tokens[:-1]], device=device)
+        with torch.no_grad():
+            target_outputs = target_model(
+                input_ids=speculative_input_ids,
+                past_key_values=target_past_key_values,  # ✅ 仅计算新增 token，复用 KV Cache
+                return_dict=True,
+                output_hidden_states=False,
+                output_attentions=False,
+                use_cache=True,  # ✅ 维护 target_model 的 KV Cache
+            )
+        logits = target_outputs.logits # 只计算新增 token 的 logits
+        if temperature > 0:
+            target_probs = torch.softmax(logits/temperature, dim=-1)  # 计算概率
+            t = target_probs.squeeze(0)
+            next_token = torch.multinomial(t, num_samples=1).squeeze(1)
+        else:
+            target_probs = torch.softmax(logits, dim=-1) 
+            next_token = torch.argmax(target_probs, dim=-1).squeeze(1)
+        target_past_key_values = target_outputs.past_key_values  # ✅ target_model 维护自己的 KV Cache
+        target_pred_tokens = next_token.tolist()
+        choose_prob_all(target_probs, accepted_tokens, speculative_tokens, target_pred_tokens, corrected_tokens, prompt_len)
+        # stop_flag = False
+        # for i in range(k):
+        #     speculative_token = speculative_tokens[i]
+        #     target_pred_token = torch.argmax(target_probs[:, i, :], dim=-1).item()
+        #     stop_flag = choose_prob(target_probs[:, i], accepted_tokens, speculative_token, target_pred_token, corrected_tokens, prompt_len)
+        #     if stop_flag:
+        #         break # 终止 speculative 采样
+
+        # 更新target_model的KV Cache
+        target_past_key_values, speculative_past_key_values = list(target_past_key_values), list(speculative_past_key_values)
+        for i in range(max(len(target_past_key_values),len(speculative_past_key_values))):
+            if i < len(target_past_key_values):
+                target_past_key_values[i] = (target_past_key_values[i][0][:,:, :len(accepted_tokens)-1], target_past_key_values[i][1][:,:, :len(accepted_tokens)-1])
+            if i < len(speculative_past_key_values):
+                speculative_past_key_values[i] = (speculative_past_key_values[i][0][:,:, :len(accepted_tokens)-1], speculative_past_key_values[i][1][:,:, :len(accepted_tokens)-1])
+        target_past_key_values, speculative_past_key_values = tuple(target_past_key_values), tuple(speculative_past_key_values)
+        speculative_input_ids = torch.tensor([[accepted_tokens[-1]]], device=device)
+        # get_k_v_cache(speculative_input_ids, target_past_key_values, speculative_past_key_values)
+            
+        # 终止条件检查
+        if tokenizer.eos_token_id in accepted_tokens[-k:]:
+            break
+
+    # 解码最终结果
+    output_text = tokenizer.decode(accepted_tokens[len(input_ids[0]):], skip_special_tokens=False)
+    return output_text, corrected_tokens, len(accepted_tokens[len(input_ids[0]):])
+
+def generate_answers(target_model, speculative_model, tokenizer, dataset, system_prompt, output_file, k, temperature):
+    """批量生成答案，并保存修复的 token，同时统计生成时间"""
+    results = read_saved_results(output_file)
+    
+    for sample in tqdm(dataset):
+        question, answer = sample["question"], sample["answer"]
+        
+        start_time = time.time()  # 记录开始时间
+        if speculative_model is not None:
+            response_text, corrected_tokens, num_tokens = speculative_decoding_chat(
+                target_model, speculative_model, tokenizer, question, system_prompt, k=k, temperature=temperature
+            )
+        else:
+            response_text, corrected_tokens, num_tokens = decoding_chat(
+                target_model, tokenizer, question, system_prompt, temperature=temperature
+            )
+        end_time = time.time()  # 记录结束时间
+        
+        generation_time = end_time - start_time  # 计算生成时间
+        
         results.append({
             "question": question,
             "generated_answer": response_text,
-            "corrected_tokens": corrected_tokens
+            "answer": answer,
+            "corrected_tokens": corrected_tokens,
+            "generation_time": generation_time,  # 记录时间,
+            "num_tokens":num_tokens
         })
-    
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
+        
+        save_results(output_file, results[-1])  # 保存结果
 
-# **加载 vLLM**
-target_model_name = "meta-llama/Llama-2-7b-chat-hf"
-speculative_model_name = "mistralai/Mistral-7B-v0.1"
 
-target_model = LLM(model=target_model_name, dtype="float16", tensor_parallel_size=1)
-speculative_model = LLM(model=speculative_model_name, dtype="float16", tensor_parallel_size=1)
-tokenizer = target_model.tokenizer
+dataset_names = {
+    'MATH500': "qq8933/MATH500",
+    'AIME': "AI-MO/aimo-validation-aime"
+}
 
-# **加载不同数据集并生成答案，保存修复信息**
-math500_dataset = load_dataset("math500.json")
-gsm8k_dataset = load_dataset("gsm8k.json")
+models_names = {
+    'deepseek-32b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    'deepseek-1.5b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    'Qwen-math-1.5b':'Qwen/Qwen2.5-Math-1.5B'
+}
 
-generate_answers(target_model, speculative_model, tokenizer, math500_dataset, "You are an expert in solving advanced mathematics problems. Provide clear and precise solutions.", "math500_results.json")
-generate_answers(target_model, speculative_model, tokenizer, gsm8k_dataset, "You are a helpful AI tutor providing step-by-step explanations to math word problems.", "gsm8k_results.json")
+def parse_args(args=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=str, default='MATH500,AIME')
+    parser.add_argument('--target_model', type=str, default='deepseek-32b')
+    parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
+    parser.add_argument('--speculative_k', type=int, default=10)
+    parser.add_argument('--accept_prob', type=float, default=0.05)
+    parser.add_argument('--temperature', type=float, default=0.6)
+    parser.add_argument('--seed', type=int, default=42)
+    return parser.parse_args(args)
+
+if __name__ == '__main__':
+    args = parse_args()
+    seed_everything(args.seed)
+    accept_prob = args.accept_prob
+    # **加载 Hugging Face 模型（支持 KV Cache + 多 GPU）**
+    target_model_name = models_names[args.target_model]  
+    target_model = AutoModelForCausalLM.from_pretrained(
+        target_model_name, torch_dtype=torch.float16,device_map="auto", low_cpu_mem_usage=True, attn_implementation="flash_attention_2",
+    )
+    tokenizer = AutoTokenizer.from_pretrained(target_model_name)
+    speculative_model = None
+    if args.speculative_model:
+        speculative_model_name = models_names[args.speculative_model] 
+        speculative_model = AutoModelForCausalLM.from_pretrained(
+            speculative_model_name,  torch_dtype=torch.float16, device_map="auto", low_cpu_mem_usage=True,attn_implementation="flash_attention_2",
+        )
+   
+    datasets = args.dataset.split(',')
+    for dataset in datasets:
+        math500_dataset = load_train_data(dataset)
+        generate_answers(target_model, speculative_model, tokenizer, math500_dataset, system_prompt,
+                          f"./results/{dataset}_{args.target_model}_{args.speculative_model}_{accept_prob}.json", 
+                          k=args.speculative_k, temperature=args.temperature)
