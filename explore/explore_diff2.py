@@ -8,6 +8,7 @@ from utils.utils import *
 from tqdm import tqdm
 import time
 import argparse
+import pickle
 
 accept_prob = 0.01
 
@@ -23,14 +24,6 @@ def load_train_data(choose_data_name):
     return choose_data
 
 def sample_logits(logits, temperature=1.0, top_k=0, top_p=0.95):
-    """
-    采样函数，支持 temperature、top-k 和 top-p 采样。
-    :param logits: 模型输出的 logits，形状为 (vocab_size,)
-    :param temperature: 温度参数，控制随机性，默认为 1.0
-    :param top_k: 仅从 top-k 概率最大的 token 采样，默认为 0（不使用）
-    :param top_p: 仅从累积概率不超过 top-p 的 token 采样（核采样），默认为 0.0（不使用）
-    :return: 采样得到的 token 索引
-    """
     if temperature > 0:
         logits = logits / temperature
     
@@ -55,10 +48,10 @@ def sample_logits(logits, temperature=1.0, top_k=0, top_p=0.95):
     
     return probabilities
 
-# 示例使用
-logits = torch.tensor([1.0, 2.0, 3.0, 4.0])  # 假设的 logits
-sampled_token = sample_logits(logits, temperature=0.7, top_k=2, top_p=0.9)
-print("Sampled token index:", sampled_token)
+# # 示例使用
+# logits = torch.tensor([1.0, 2.0, 3.0, 4.0])  # 假设的 logits
+# sampled_token = sample_logits(logits, temperature=0.7, top_k=2, top_p=0.9)
+# print("Sampled token index:", sampled_token)
 
 
 
@@ -96,14 +89,16 @@ def choose_prob_all(target_probs, accepted_tokens, speculative_tokens, target_pr
 #         })
 #         return True
 
-def decoding_chat(target_model, tokenizer, question, system_prompt, max_tokens=32*1024, temperature=0.7):
+def decoding_chat(target_model, tokenizer, question, system_prompt=None, 
+                  max_tokens=32*1024, temperature=0.6, topp=0.95, topk=50, do_sample=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
+    record_tokens, avg_probabilities = [], None
     # 构造聊天消息
-    messages = [
-        # {"role": "system", "content": system_prompt},
+    messages = []
+    if system_prompt: messages.append({"role": "system", "content": system_prompt})
+    messages.append( 
         {"role": "user", "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + question + ' <think>\n'}
-    ]
+    )
     input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to(device)
     target_past_key_values = None
     accepted_tokens = input_ids.tolist()[0]
@@ -131,24 +126,37 @@ def decoding_chat(target_model, tokenizer, question, system_prompt, max_tokens=3
                 use_cache=True,  # ✅ 维护 target_model 的 KV Cache
             )
         next_token_logits = outputs.logits[:, -1, :]
-        # 采样下一个token
-        if temperature > 0:
-            probs = torch.softmax(next_token_logits / temperature, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+        probabilities = sample_logits(next_token_logits, temperature, top_k=topk, top_p=topp)
+        if do_sample:
+             next_token = torch.multinomial(probabilities, num_samples=1).squeeze(1)
         else:
             next_token = torch.argmax(next_token_logits, dim=-1)
         
         accepted_tokens.append(next_token.item())
         target_past_key_values = outputs.past_key_values
         current_ids = next_token.unsqueeze(0)
- 
+
+        filtered_indices = torch.where(probabilities > accept_prob)  # 找到大于 0.01 的 token 位置
+        filtered_probs = probabilities[filtered_indices].tolist()  # 取出对应的概率
+        filtered_tokens = filtered_indices[-1].tolist() # 获取对应的 token 索引
+        record_tokens.append(
+            {
+                'token_id': filtered_tokens,
+                'probs' : filtered_probs,
+                "token": [tokenizer.decode(t) for t in filtered_tokens]
+            }
+        )
+        if avg_probabilities is None:
+            avg_probabilities = probabilities
+        else: avg_probabilities = avg_probabilities + probabilities
         # 终止条件检查
         if tokenizer.eos_token_id == accepted_tokens[-1]:
             break
 
     # 解码最终结果
     output_text = tokenizer.decode(accepted_tokens[len(input_ids[0]):], skip_special_tokens=True)
-    return output_text, [], len(accepted_tokens[len(input_ids[0]):])
+    num_tokens = len(accepted_tokens[len(input_ids[0]):])
+    return output_text, [], num_tokens, record_tokens, avg_probabilities.cpu().numpy()/num_tokens
 
 
 def speculative_decoding_chat(target_model, speculative_model, tokenizer, question, system_prompt, max_tokens=32*1024, k=5, temperature=0.7):
@@ -266,11 +274,11 @@ def speculative_decoding_chat(target_model, speculative_model, tokenizer, questi
     output_text = tokenizer.decode(accepted_tokens[len(input_ids[0]):], skip_special_tokens=False)
     return output_text, corrected_tokens, len(accepted_tokens[len(input_ids[0]):])
 
-def generate_answers(target_model, speculative_model, tokenizer, dataset, system_prompt, output_file, k, temperature):
-    """批量生成答案，并保存修复的 token，同时统计生成时间"""
+def generate_answers(target_model, speculative_model, tokenizer, dataset, system_prompt, output_file, 
+                     k, temperature, topp=0.95, topk=50):
     results = read_saved_results(output_file)
     
-    for sample in tqdm(dataset):
+    for sample in tqdm(dataset.select(range(len(results), len(dataset)))):
         question, answer = sample["question"], sample["answer"]
         
         start_time = time.time()  # 记录开始时间
@@ -279,13 +287,24 @@ def generate_answers(target_model, speculative_model, tokenizer, dataset, system
                 target_model, speculative_model, tokenizer, question, system_prompt, k=k, temperature=temperature
             )
         else:
-            response_text, corrected_tokens, num_tokens = decoding_chat(
-                target_model, tokenizer, question, system_prompt, temperature=temperature
+            response_text, corrected_tokens, num_tokens, record_tokens, avg_probabilities = decoding_chat(
+                target_model, tokenizer, question, system_prompt, 
+                temperature=temperature, topk=topk, topp=topp
             )
         end_time = time.time()  # 记录结束时间
         
         generation_time = end_time - start_time  # 计算生成时间
-        
+        if speculative_model is not None:
+            pass
+        else:
+            data = {
+                "avg_probabilities": avg_probabilities,
+                "record_tokens": record_tokens
+            }
+            os.makedirs(f"/scratch/pbsjobs/wxy320/speculative/{args.target_model}", exist_ok=True)
+            with open(f"/scratch/pbsjobs/wxy320/speculative/{args.target_model}/data{len(results)}.pkl", "wb") as f:
+                pickle.dump(data, f)
+
         results.append({
             "question": question,
             "generated_answer": response_text,
@@ -305,18 +324,21 @@ dataset_names = {
 
 models_names = {
     'deepseek-32b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    'deepseek-7b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
     'deepseek-1.5b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     'Qwen-math-1.5b':'Qwen/Qwen2.5-Math-1.5B'
 }
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='MATH500,AIME')
-    parser.add_argument('--target_model', type=str, default='deepseek-32b')
-    parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
+    parser.add_argument('--dataset', type=str, default='MATH500')
+    parser.add_argument('--target_model', type=str, default='deepseek-1.5b')
+    parser.add_argument('--speculative_model', type=str, default=None) 
     parser.add_argument('--speculative_k', type=int, default=10)
-    parser.add_argument('--accept_prob', type=float, default=0.05)
+    parser.add_argument('--accept_prob', type=float, default=0.01)
     parser.add_argument('--temperature', type=float, default=0.6)
+    parser.add_argument('--topp', type=float, default=0.95)
+    parser.add_argument('--topk', type=float, default=0)
     parser.add_argument('--seed', type=int, default=42)
     return parser.parse_args(args)
 
@@ -340,6 +362,6 @@ if __name__ == '__main__':
     datasets = args.dataset.split(',')
     for dataset in datasets:
         math500_dataset = load_train_data(dataset)
-        generate_answers(target_model, speculative_model, tokenizer, math500_dataset, system_prompt,
+        generate_answers(target_model, speculative_model, tokenizer, math500_dataset, None,
                           f"./results/{dataset}_{args.target_model}_{args.speculative_model}_{accept_prob}.json", 
-                          k=args.speculative_k, temperature=args.temperature)
+                          k=args.speculative_k, temperature=args.temperature, topp=args.topp, topk=args.topk)
