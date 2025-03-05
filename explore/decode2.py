@@ -12,6 +12,32 @@ import pickle
 from generate import generate_with_partial_kv
 import copy
 
+def sentiment_analysis(text, positive_words, negative_words):
+    positive_count = 0
+    negative_count = 0
+    last_pos_index = -1
+    last_neg_index = -1
+
+    text = text.lower()  # 转换为小写以确保匹配不区分大小写
+    for word in positive_words:
+        if word in text:
+            positive_count += text.count(word)  # 统计出现次数
+            last_pos_index = max(last_pos_index, text.rfind(word))  # 记录最后出现的位置
+
+    for word in negative_words:
+        if word in text:
+            negative_count += text.count(word)  # 统计出现次数
+            last_neg_index = max(last_neg_index, text.rfind(word))  # 记录最后出现的位置
+
+    if positive_count > negative_count:
+        return 1  # 正向
+    elif negative_count > positive_count:
+        return -1  # 负向
+    elif positive_count == negative_count and positive_count > 0:
+        return -1 # 1 if last_pos_index > last_neg_index else -1  # 取最靠后的词类别
+    else:
+        return 0  # 中立
+
 def load_train_data(choose_data_name):
     split = 'train' if choose_data_name not in ['MATH500'] else 'test'
     choose_data_name = dataset_names[choose_data_name]
@@ -29,6 +55,7 @@ def speculative_generate(
     speculative_model, target_model, tokenizer, input_ids, help_think_word_ids,
     max_tokens=100, max_target_tokens=10, temperature=1.0, top_k=50, top_p=0.95
 ):
+    try_correct_num = 0
     spec_kv=None
     tgt_kv=None
     device = input_ids.device
@@ -53,36 +80,47 @@ def speculative_generate(
                 cache_generated_ids = generated_ids
             else:
                 cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
-            # **Step 3: 目标模型生成 max_target_tokens 个 token**
-            tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
-                target_model, tokenizer, cache_generated_ids, copy.deepcopy(tgt_kv),
-                max_new_tokens=max_target_tokens, temperature=temperature, top_k=top_k, top_p=top_p
-            )
+
             spe_new_ids, spec_kv_candidate = generate_with_partial_kv(
                 speculative_model, tokenizer, cache_generated_ids, copy.deepcopy(spec_kv),
                 max_new_tokens=max_target_tokens, temperature=temperature, top_k=top_k, top_p=top_p
             )
-            # **解码 Target Model 生成的文本**
-            tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
             spe_decoded_text = tokenizer.decode(spe_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
-            # show_decoded_text = tokenizer.decode(tgt_new_ids[0], skip_special_tokens=True)
-            # **Step 4: 目标模型生成的文本是否包含关键字**
-            correct_flag = False
-            if tgt_decoded_text != spe_decoded_text:
-                if any(trigger in tgt_decoded_text.lower() for trigger in TARGET_VALIDATION_KEYWORDS['positive']):
-                    correct_flag = True
-                if not any(trigger in tgt_decoded_text.lower() for trigger in TARGET_VALIDATION_KEYWORDS['negative']) \
-                    and any(trigger in spe_decoded_text.lower() for trigger in TARGET_VALIDATION_KEYWORDS['negative']):
-                    correct_flag = True
-            if correct_flag:
-                correct_tokens.append({
-                    'pos': cache_generated_ids.shape[1]-prompt_len, 
-                    'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
-                generated_ids = tgt_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
-                tgt_kv = tgt_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
-            else:
-                generated_ids = spe_new_ids
-                spec_kv = spec_kv_candidate
+            spe_sent = sentiment_analysis(spe_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative'])
+            if spe_sent < 0:
+                try_correct_num = try_correct_num+1
+                # **Step 3: 目标模型生成 max_target_tokens 个 token**
+                tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
+                    target_model, tokenizer, cache_generated_ids, copy.deepcopy(tgt_kv),
+                    max_new_tokens=max_target_tokens, temperature=temperature, top_k=top_k, top_p=top_p
+                )
+                
+                # **解码 Target Model 生成的文本**
+                tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
+                tgt_sent = sentiment_analysis(tgt_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative'])
+                correct_flag = False
+                if spe_sent * tgt_sent <= 0: correct_flag=True
+                # if spe_sent<0: 
+                #     if spe_sent * tgt_sent <= 0: correct_flag=True
+                # if spe_sent >0: 
+                #     if spe_sent * tgt_sent < 0: correct_flag=True
+                # show_decoded_text = tokenizer.decode(tgt_new_ids[0], skip_special_tokens=True)
+                # **Step 4: 目标模型生成的文本是否包含关键字**
+                # if tgt_decoded_text != spe_decoded_text:
+                #     if any(trigger in tgt_decoded_text.lower() for trigger in TARGET_VALIDATION_KEYWORDS['positive']):
+                #         correct_flag = True
+                #     if not any(trigger in tgt_decoded_text.lower() for trigger in TARGET_VALIDATION_KEYWORDS['negative']) \
+                #         and any(trigger in spe_decoded_text.lower() for trigger in TARGET_VALIDATION_KEYWORDS['negative']):
+                #         correct_flag = True
+                if correct_flag:
+                    correct_tokens.append({
+                        'pos': cache_generated_ids.shape[1]-prompt_len, 
+                        'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
+                    generated_ids = tgt_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
+                    tgt_kv = tgt_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
+                else:
+                    generated_ids = spe_new_ids
+                    spec_kv = spec_kv_candidate
             begin = False
         
         if tgt_kv is not None and tgt_kv[0][0].shape[2] > len(generated_ids[0]):
@@ -95,13 +133,13 @@ def speculative_generate(
 
     # **最终解码文本**
     generated_text = tokenizer.decode(generated_ids[0,prompt_len:], skip_special_tokens=True)
-    return generated_text, len(generated_ids[0])-prompt_len, correct_tokens
+    return generated_text, len(generated_ids[0])-prompt_len, correct_tokens, try_correct_num
 
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='MATH500')
-    parser.add_argument('--target_model', type=str, default='deepseek-7b')
+    parser.add_argument('--target_model', type=str, default='deepseek-32b')
     parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
     parser.add_argument('--speculative_k', type=int, default=15)
     parser.add_argument('--accept_prob', type=float, default=0.01)
@@ -119,8 +157,8 @@ dataset_names = {
 
 models_names = {
     'deepseek-32b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-    'deepseek-7b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
     'deepseek-1.5b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+     'deepseek-7b': "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
     'Qwen-math-1.5b':'Qwen/Qwen2.5-Math-1.5B'
 }
 
@@ -145,8 +183,8 @@ if __name__ == '__main__':
 
 # **触发 Token & 关键词**
 TRIGGER_TOKENS = {"\n\n"}  # 遇到这些 token 触发 Target Model
-TARGET_VALIDATION_KEYWORDS = {"negative":["wait", "hmm", "alternatively",'double-check', 'hold on'],
-                              "positive":['yeah','yes', 'alright', 'final answer']}  # 目标关键字
+TARGET_VALIDATION_KEYWORDS = {"negative":["wait", "alternatively",'double-check', 'hold on','another approach'],
+                              "positive":['yeah','yes', 'alright','final answer']}  # 目标关键字
 help_think_word = None # '\n\n'
 system_prompt = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -165,7 +203,7 @@ help_think_word_ids = None if help_think_word is None else tokenizer([help_think
 datasets = args.dataset.split(',')
 for dataset in datasets:
     math500_dataset = load_train_data(dataset)
-    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}.json"
+    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_3.json"
 
     results = read_saved_results(output_file)
     for sample in tqdm(math500_dataset.select(range(len(results), len(math500_dataset)))):
@@ -180,7 +218,7 @@ for dataset in datasets:
     
         start_time = time.time()  # 记录开始时间
         if speculative_model is not None:
-           generated_text, num_tokens, correct_tokens = speculative_generate(
+           generated_text, num_tokens, correct_tokens,try_correct_num = speculative_generate(
                 speculative_model, target_model, tokenizer, input_ids, help_think_word_ids,
                 max_target_tokens=args.speculative_k, max_tokens=args.max_tokens
             )
@@ -195,7 +233,8 @@ for dataset in datasets:
             "answer": answer,
             "corrected_tokens": correct_tokens,
             "generation_time": generation_time,  # 记录时间,
-            "num_tokens":num_tokens
+            "num_tokens":num_tokens,
+            'try_correct_num':try_correct_num
         })
         
         save_results(output_file, results[-1])  # 保存结果
