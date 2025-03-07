@@ -61,8 +61,9 @@ def speculative_generate(
     prompt_len = input_ids.shape[1]
     generated_ids = input_ids  # 直接存储 token ids
     correct_tokens = []
-    begin = False
-    negative_sent_num, recap_after_negtive_num, recap_token_num = 0, 10, 150
+    begin,change_flag = False, False
+    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 15, 100, 100,25
+    recap_token_num = original_recap_token_num
     while generated_ids.shape[1] < max_tokens:  # **不再手动检查 max_tokens**
         if not begin:
             # **Step 1: Speculative Model 逐个生成 1 个 token**
@@ -76,57 +77,71 @@ def speculative_generate(
             decoded_text = tokenizer.decode(new_ids[0, -1:], skip_special_tokens=True)
             
         if begin or any(trigger in decoded_text for trigger in TRIGGER_TOKENS):
-            if begin or help_think_word_ids is None:
-                cache_generated_ids = generated_ids
+            # 1. 判断负向次数是否过多
+            # 2. 判断是否begin是否需要处理
+            # 3. 判断是否出现反相
+            if begin:
+                change_tokens = begin_token_num
+                begin = False
+                change_flag = True
+            elif negative_sent_num > recap_after_negtive_num:
+                generated_ids = torch.cat([generated_ids, help_recap_words_ids], dim=-1)
+                change_tokens = recap_token_num
+                change_flag = True
+                negative_sent_num = 0
+                recap_token_num = min(recap_token_num + add_each_recap, 500)
             else:
-                cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
-
-            spe_new_ids, spec_kv_candidate = generate_with_partial_kv(
-                speculative_model, tokenizer, cache_generated_ids, copy.deepcopy(spec_kv),
-                max_new_tokens=max_target_tokens, temperature=temperature, top_k=top_k, top_p=top_p
-            )
-            spe_decoded_text = tokenizer.decode(spe_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
-            spe_sent = sentiment_analysis(spe_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative']+TARGET_VALIDATION_KEYWORDS['verify'])
-            if spe_sent != 0:
-                change_tokens = 0
-                try_correct_num = try_correct_num+1
-                # **Step 3: 目标模型生成 max_target_tokens 个 token**
-                tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
-                    target_model, tokenizer, cache_generated_ids, copy.deepcopy(tgt_kv),
+                if help_think_word_ids is not None:
+                    cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
+                else:
+                    cache_generated_ids = generated_ids
+                spe_new_ids, spec_kv_candidate = generate_with_partial_kv(
+                    speculative_model, tokenizer, cache_generated_ids, copy.deepcopy(spec_kv),
                     max_new_tokens=max_target_tokens, temperature=temperature, top_k=top_k, top_p=top_p
                 )
-                change_tokens = change_tokens+max_target_tokens
-                # **解码 Target Model 生成的文本**
-                tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
-                tgt_sent = sentiment_analysis(tgt_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative']+TARGET_VALIDATION_KEYWORDS['verify'])
-                change_flag = False
-                if (spe_sent<0 and tgt_sent >=0) or (spe_sent>0 and tgt_sent<0):
-                    generated_ids = tgt_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
-                    tgt_kv = tgt_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
-                    decode_text = tgt_decoded_text
-                    correct_tokens.append({
-                        'pos': cache_generated_ids.shape[1]-prompt_len, 'token_num':change_tokens,
-                        'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
-                    change_flag = True
-                else:
-                    generated_ids = spe_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
-                    spec_kv = spec_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
-                    decode_text = spe_decoded_text
-                if change_flag:
-                    change_tokens = 90
-                    if contains_keywords(decode_text, TARGET_VALIDATION_KEYWORDS['verify']):
-                        change_tokens = recap_token_num
+                spe_decoded_text = tokenizer.decode(spe_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
+                spe_sent = sentiment_analysis(spe_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative']+TARGET_VALIDATION_KEYWORDS['verify'])
+                if spe_sent != 0:
+                    try_correct_num = try_correct_num+1
+                    # **Step 3: 目标模型生成 max_target_tokens 个 token**
                     tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
-                        target_model, tokenizer, generated_ids, copy.deepcopy(tgt_kv_candidate),
-                        max_new_tokens=change_tokens, temperature=temperature, top_k=top_k, top_p=top_p
+                        target_model, tokenizer, cache_generated_ids, copy.deepcopy(tgt_kv),
+                        max_new_tokens=max_target_tokens, temperature=temperature, top_k=top_k, top_p=top_p
                     )
-                    tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-change_tokens:], skip_special_tokens=True)
-                    generated_ids = tgt_new_ids
-                    tgt_kv = tgt_kv_candidate
-                    correct_tokens.append({
-                        'pos': generated_ids.shape[1]-prompt_len, 'token_num':change_tokens,
-                        'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
-            begin = False
+                    # **解码 Target Model 生成的文本**
+                    tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
+                    tgt_sent = sentiment_analysis(tgt_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative']+TARGET_VALIDATION_KEYWORDS['verify'])
+                    if (spe_sent<0 and tgt_sent >=0) or (spe_sent>0 and tgt_sent<0):
+                        generated_ids = tgt_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
+                        tgt_kv = tgt_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
+                        decode_text = tgt_decoded_text
+                        correct_tokens.append({
+                            'pos': cache_generated_ids.shape[1]-prompt_len, 'token_num':max_target_tokens,
+                            'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
+                        final_sent=tgt_sent
+                    else:
+                        generated_ids = spe_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
+                        spec_kv = spec_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
+                        decode_text = spe_decoded_text
+                        final_sent=spe_sent
+                    if final_sent < 0: negative_sent_num = negative_sent_num+1
+                    if contains_keywords(decode_text, TARGET_VALIDATION_KEYWORDS['verify']):
+                        change_tokens = original_recap_token_num
+                        change_flag = True
+                        negative_sent_num = 0
+            if change_flag:
+                try_correct_num = try_correct_num+1
+                tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
+                    target_model, tokenizer, generated_ids, copy.deepcopy(tgt_kv_candidate),
+                    max_new_tokens=change_tokens, temperature=temperature, top_k=top_k, top_p=top_p
+                )
+                tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-change_tokens:], skip_special_tokens=True)
+                generated_ids = tgt_new_ids
+                tgt_kv = tgt_kv_candidate
+                correct_tokens.append({
+                    'pos': generated_ids.shape[1]-prompt_len, 'token_num':change_tokens,
+                    'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
+                change_flag = False
         
         if tgt_kv is not None and tgt_kv[0][0].shape[2] > len(generated_ids[0]):
             print("wrong")
@@ -205,7 +220,7 @@ if tokenizer.pad_token_id is None:
 target_model = AutoModelForCausalLM.from_pretrained(target_model_name, torch_dtype=torch.float16, device_map="auto")
 speculative_model = AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto")
 help_think_word_ids = None if help_think_word is None else tokenizer([help_think_word], return_tensors="pt").input_ids.to("cuda")
-help_recap_words_ids = tokenizer(["...\n\nLet me recap to make sure I didn't make any mistakes"], return_tensors="pt").input_ids.to("cuda")
+help_recap_words_ids = tokenizer(["Now let me shortly check recent steps to make sure I didn't make any mistakes: "], return_tensors="pt").input_ids.to("cuda")
 datasets = args.dataset.split(',')
 for dataset in datasets:
     math500_dataset = load_train_data(dataset)

@@ -11,6 +11,7 @@ import argparse
 import pickle
 from generate import generate_with_partial_kv
 import copy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def sentiment_analysis(text, positive_words, negative_words):
     positive_count = 0
@@ -76,11 +77,13 @@ def speculative_generate(
             decoded_text = tokenizer.decode(new_ids[0, -1:], skip_special_tokens=True)
             
         if begin or any(trigger in decoded_text for trigger in TRIGGER_TOKENS):
+            # 1. 判断负向次数是否过多
+            # 2. 判断是否begin是否需要处理
+            # 3. 判断是否出现反相
             if begin or help_think_word_ids is None:
                 cache_generated_ids = generated_ids
             else:
                 cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
-
             spe_new_ids, spec_kv_candidate = generate_with_partial_kv(
                 speculative_model, tokenizer, cache_generated_ids, copy.deepcopy(spec_kv),
                 max_new_tokens=max_target_tokens, temperature=temperature, top_k=top_k, top_p=top_p
@@ -99,7 +102,7 @@ def speculative_generate(
                 # **解码 Target Model 生成的文本**
                 tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
                 tgt_sent = sentiment_analysis(tgt_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative']+TARGET_VALIDATION_KEYWORDS['verify'])
-                change_flag = False
+                final_sent = tgt_sent
                 if (spe_sent<0 and tgt_sent >=0) or (spe_sent>0 and tgt_sent<0):
                     generated_ids = tgt_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
                     tgt_kv = tgt_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
@@ -112,8 +115,10 @@ def speculative_generate(
                     generated_ids = spe_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
                     spec_kv = spec_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
                     decode_text = spe_decoded_text
+                    final_sent = spe_sent
+                if final_sent < 0: negative_sent_num = negative_sent_num+1
                 if change_flag:
-                    change_tokens = 90
+                    change_tokens = 40
                     if contains_keywords(decode_text, TARGET_VALIDATION_KEYWORDS['verify']):
                         change_tokens = recap_token_num
                     tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
@@ -202,48 +207,67 @@ speculative_model_name = models_names[args.speculative_model]  # Speculative Mod
 tokenizer = AutoTokenizer.from_pretrained(target_model_name)
 if tokenizer.pad_token_id is None:
     tokenizer.pad_token_id = tokenizer.eos_token_id 
-target_model = AutoModelForCausalLM.from_pretrained(target_model_name, torch_dtype=torch.float16, device_map="auto")
-speculative_model = AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto")
+target_model = [AutoModelForCausalLM.from_pretrained(target_model_name, torch_dtype=torch.float16, device_map="auto") for i in range(2)]
+speculative_model =[ AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto") for i in range(2)]
 help_think_word_ids = None if help_think_word is None else tokenizer([help_think_word], return_tensors="pt").input_ids.to("cuda")
-help_recap_words_ids = tokenizer(["...\n\nLet me recap to make sure I didn't make any mistakes"], return_tensors="pt").input_ids.to("cuda")
+help_recap_words_ids = tokenizer(["...\n\nLet me summarize and recap to make sure I didn't make any mistakes"], return_tensors="pt").input_ids.to("cuda")
 datasets = args.dataset.split(',')
+
+# 定义一个处理单个样本的函数
+def process_sample(index, sample):
+    question, answer = sample["question"], sample["answer"]
+    messages = []
+    if system_prompt: 
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append( 
+        {"role": "user", "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + question + ' <think>\n'}
+    )
+    input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to(device)
+
+    start_time = time.time()
+    if speculative_model is not None:
+        generated_text, num_tokens, correct_tokens, try_correct_num = speculative_generate(
+            speculative_model[index%2], target_model[index%2], tokenizer, input_ids, help_think_word_ids, help_recap_words_ids,
+            max_target_tokens=args.speculative_k, max_tokens=args.max_tokens
+        )
+    else:
+        return None
+
+    end_time = time.time()
+    generation_time = end_time - start_time
+
+    return index, {
+        "question": question,
+        "generated_text": generated_text,
+        "answer": answer,
+        "corrected_tokens": correct_tokens,
+        "generation_time": generation_time,
+        "num_tokens": num_tokens,
+        "try_correct_num": try_correct_num
+    }
+
+
 for dataset in datasets:
     math500_dataset = load_train_data(dataset)
     output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_new.json"
 
     results = read_saved_results(output_file)
-    for sample in tqdm(math500_dataset.select(range(len(results), len(math500_dataset)))):
-        question, answer = sample["question"], sample["answer"]
-        messages = []
-        if system_prompt: 
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append( 
-            {"role": "user", "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + question + ' <think>\n'}
-        )
-        input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to(device)
-    
-        start_time = time.time()  # 记录开始时间
-        if speculative_model is not None:
-           generated_text, num_tokens, correct_tokens,try_correct_num = speculative_generate(
-                speculative_model, target_model, tokenizer, input_ids, help_think_word_ids,help_recap_words_ids,
-                max_target_tokens=args.speculative_k, max_tokens=args.max_tokens
-            )
-        else:
-            pass
-        end_time = time.time()  # 记录结束时间
-        generation_time = end_time - start_time  # 计算生成时间
-
-        results.append({
-            "question": question,
-            "generated_text": generated_text,
-            "answer": answer,
-            "corrected_tokens": correct_tokens,
-            "generation_time": generation_time,  # 记录时间,
-            "num_tokens":num_tokens,
-            'try_correct_num':try_correct_num
-        })
+    # 使用 ThreadPoolExecutor 进行多线程加速，并保持顺序
+    with ThreadPoolExecutor(max_workers=4) as executor:  # 可调整 max_workers
+        futures = {executor.submit(process_sample, i, sample): i for i, sample in 
+                enumerate(math500_dataset.select(range(len(results), len(math500_dataset))))}
         
-        save_results(output_file, results[-1])  # 保存结果
+        # 按照 index 排序结果，确保按顺序存储
+        sorted_results = [None] * len(futures)
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            index, result = future.result()
+            sorted_results[index] = result  # 按索引顺序存入列表
+
+        # 依次保存结果，确保顺序一致
+        for result in sorted_results:
+            if result:
+                results.append(result)
+                save_results(output_file, result)  # 逐个保存，防止中途崩溃
 
 
 # # **初始化输入**
