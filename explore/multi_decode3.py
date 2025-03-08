@@ -63,7 +63,7 @@ def speculative_generate(
     generated_ids = input_ids  # 直接存储 token ids
     correct_tokens = []
     begin,change_flag = False, False
-    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 25, 200, 100, 50
+    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 15, 200, 100, 50
     recap_token_num = original_recap_token_num+50
     while generated_ids.shape[1] < max_tokens:  # **不再手动检查 max_tokens**
         if not begin:
@@ -91,6 +91,7 @@ def speculative_generate(
                 change_flag = True
                 negative_sent_num = 0
                 recap_token_num = min(recap_token_num + add_each_recap, 500)
+                recap_after_negtive_num = min(recap_after_negtive_num+5, 30)
             else:
                 if help_think_word_ids is not None:
                     cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
@@ -129,7 +130,7 @@ def speculative_generate(
                     if contains_keywords(decode_text, TARGET_VALIDATION_KEYWORDS['verify']):
                         change_tokens = original_recap_token_num
                         change_flag = True
-                        negative_sent_num = 0
+                        # negative_sent_num = 0
             if change_flag:
                 try_correct_num = try_correct_num+1
                 tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(

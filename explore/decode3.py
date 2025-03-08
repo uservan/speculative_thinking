@@ -221,7 +221,7 @@ target_model = AutoModelForCausalLM.from_pretrained(target_model_name, torch_dty
 speculative_model = AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto")
 help_think_word_ids = None if help_think_word is None else tokenizer([help_think_word], return_tensors="pt").input_ids.to("cuda")
 # Let me summarize and recap to make sure I didn't make any mistakes
-help_recap_words_ids = tokenizer(["Let me shortly verify previous steps to make sure I didn't make any mistakes: "], return_tensors="pt").input_ids.to("cuda")
+help_recap_words_ids = tokenizer(['Let me see whether there is another way to slove the question: '], return_tensors="pt").input_ids.to("cuda")
 datasets = args.dataset.split(',')
 for dataset in datasets:
     start,end = 0, 100
