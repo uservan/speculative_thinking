@@ -9,8 +9,9 @@ from tqdm import tqdm
 import time
 import argparse
 import pickle
-from generate import generate_with_partial_kv
+from generate import generate_with_partial_kv, generate_hf
 import copy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def sentiment_analysis(text, positive_words, negative_words):
     positive_count = 0
@@ -158,7 +159,9 @@ def speculative_generate(
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='MATH500')
+    parser.add_argument('--start', type=int, default=0)
+    parser.add_argument('--end', type=int, default=90)
+    parser.add_argument('--dataset', type=str, default='AIME')
     parser.add_argument('--target_model', type=str, default='deepseek-32b')
     parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
     parser.add_argument('--speculative_k', type=int, default=10)
@@ -212,54 +215,95 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # **加载 Speculative Model 和 Target Model**
 target_model_name = models_names[args.target_model]  # 目标模型
-speculative_model_name = models_names[args.speculative_model]  # Speculative Model (更小的模型)
 
 tokenizer = AutoTokenizer.from_pretrained(target_model_name)
 if tokenizer.pad_token_id is None:
     tokenizer.pad_token_id = tokenizer.eos_token_id 
-target_model = AutoModelForCausalLM.from_pretrained(target_model_name, torch_dtype=torch.float16, device_map="auto")
-speculative_model = AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto")
+target_model = [ AutoModelForCausalLM.from_pretrained(target_model_name, torch_dtype=torch.float16, device_map="auto") for i in range(1)]
+speculative_model = [None]
+if args.speculative_model is not None: 
+    speculative_model_name = models_names[args.speculative_model]  # Speculative Model (更小的模型)
+    speculative_model = [AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto") for i in range(1)]
 help_think_word_ids = None if help_think_word is None else tokenizer([help_think_word], return_tensors="pt").input_ids.to("cuda")
 # Let me summarize and recap to make sure I didn't make any mistakes
-help_recap_words_ids = tokenizer(["Let me shortly verify previous steps to make sure I didn't make any mistakes: "], return_tensors="pt").input_ids.to("cuda")
+help_recap_words_ids = tokenizer(["Now let me shortly summarize and check previous thoughts to make sure I didn't make any mistakes: "], return_tensors="pt").input_ids.to("cuda")
 datasets = args.dataset.split(',')
+
+start,end = args.start, args.end
+
 for dataset in datasets:
-    start,end = 0, 100
-    math500_dataset = load_train_data(dataset).select(range(start, end))
+    math500_dataset = load_train_data(dataset).select(range(start,end))
     output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_new_{start}_{end}.json"
+
     results = read_saved_results(output_file)
-    for sample in tqdm(math500_dataset.select(range(len(results), len(math500_dataset)))):
+    idxs = {r['index'] for r in results}
+    remaining_data = math500_dataset# .select(range(len(math500_dataset)))
+
+    def process_sample(idx, sample):
+        """处理单个样本，并返回索引，确保顺序"""
         question, answer = sample["question"], sample["answer"]
         messages = []
-        if system_prompt: 
+        if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append( 
-            {"role": "user", "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + question + ' <think>\n'}
-        )
+        messages.append({
+            "role": "user",
+            "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + question + ' <think>\n'
+        })
         input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to(device)
-    
+
         start_time = time.time()  # 记录开始时间
-        if speculative_model is not None:
+        speculative_model_, target_model_ = speculative_model[0], target_model[0]
+        if speculative_model_ is not None:
            generated_text, num_tokens, correct_tokens,try_correct_num = speculative_generate(
-                speculative_model, target_model, tokenizer, input_ids, help_think_word_ids,help_recap_words_ids,
-                max_target_tokens=args.speculative_k, max_tokens=args.max_tokens
+                speculative_model_, target_model_, tokenizer, input_ids, help_think_word_ids,help_recap_words_ids,
+                max_target_tokens=args.speculative_k, max_tokens=args.max_tokens,
+                temperature=args.temperature, top_p=args.topp
             )
         else:
-            pass
+            prompt_len = input_ids.shape[1]
+            generated_ids_hf = generate_hf(target_model_, tokenizer, input_ids, args.max_tokens,
+                        temperature=args.temperature, top_p=args.topp)
+            generated_text = tokenizer.decode(generated_ids_hf[0,prompt_len:], skip_special_tokens=True)
+            num_tokens, correct_tokens,try_correct_num = None, None, None
         end_time = time.time()  # 记录结束时间
         generation_time = end_time - start_time  # 计算生成时间
 
-        results.append({
+        return {
+            "index": idx,  # 记录原始索引，确保排序
             "question": question,
             "generated_text": generated_text,
             "answer": answer,
             "corrected_tokens": correct_tokens,
-            "generation_time": generation_time,  # 记录时间,
-            "num_tokens":num_tokens,
-            'try_correct_num':try_correct_num
-        })
-        
-        save_results(output_file, results[-1])  # 保存结果
+            "generation_time": generation_time,
+            "num_tokens": num_tokens,
+            "try_correct_num": try_correct_num
+        }
+
+    # 线程池并行处理
+    max_workers = min(4, os.cpu_count())  # 限制最大线程数，防止超载
+    print(f"🚀 自动分配线程数: {max_workers}")
+    # max_workers = 8  # 根据显存情况调整
+    results_list = []  # 用于存储返回的 future 结果
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_sample, idx, sample): idx for idx, sample in enumerate(remaining_data) if idx not in idxs}
+
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            try:
+                result = future.result()
+                results_list.append(result)  # 先存储，保证结果完整
+            except Exception as e:
+                print(f"Error processing sample {futures[future]}: {e}")
+
+    # **确保最终结果按索引排序**
+    results_list = sorted(results_list, key=lambda x: x["index"])
+
+    # **按顺序存入 results 并保存**
+    for res in results_list:
+        results.append(res)
+        save_results(output_file, res)
+
+print("所有任务完成！")
+
 
 
 # # **初始化输入**
