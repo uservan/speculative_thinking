@@ -93,12 +93,12 @@ def speculative_generate(
                 change_tokens = begin_token_num
                 begin = False
                 change_flag = True
-            elif negative_sent_num >= recap_after_negtive_num:
-                generated_ids = torch.cat([generated_ids, help_recap_words_ids], dim=-1)
-                change_tokens = recap_token_num
-                change_flag = True
-                negative_sent_num = 0
-                recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 500), min(recap_after_negtive_num+15, 50)
+            # elif negative_sent_num >= recap_after_negtive_num:
+            #     generated_ids = torch.cat([generated_ids, help_recap_words_ids], dim=-1)
+            #     change_tokens = recap_token_num
+            #     change_flag = True
+            #     negative_sent_num = 0
+            #     recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 500), min(recap_after_negtive_num+15, 50)
             else:
                 if help_think_word_ids is not None:
                     cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
@@ -120,7 +120,7 @@ def speculative_generate(
                     # **解码 Target Model 生成的文本**
                     tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
                     tgt_sent = sentiment_analysis(tgt_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative']+TARGET_VALIDATION_KEYWORDS['verify'])
-                    if (spe_sent<0 and tgt_sent >=0) or (spe_sent>0 and tgt_sent<0):
+                    if True: #(spe_sent<0 and tgt_sent >=0) or (spe_sent>0 and tgt_sent<0):
                         generated_ids = tgt_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
                         tgt_kv = tgt_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
                         decode_text = tgt_decoded_text
@@ -138,19 +138,19 @@ def speculative_generate(
                         change_tokens = original_recap_token_num
                         change_flag = True
                         # negative_sent_num = 0
-            if change_flag:
-                try_correct_num = try_correct_num+1
-                tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
-                    target_model, tokenizer, generated_ids, copy.deepcopy(tgt_kv_candidate),
-                    max_new_tokens=change_tokens, temperature=temperature, top_k=top_k, top_p=top_p
-                )
-                tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-change_tokens:], skip_special_tokens=True)
-                generated_ids = tgt_new_ids
-                tgt_kv = tgt_kv_candidate
-                correct_tokens.append({
-                    'pos': generated_ids.shape[1]-prompt_len, 'token_num':change_tokens,
-                    'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
-                change_flag = False
+            # if change_flag:
+            #     try_correct_num = try_correct_num+1
+            #     tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
+            #         target_model, tokenizer, generated_ids, copy.deepcopy(tgt_kv_candidate),
+            #         max_new_tokens=change_tokens, temperature=temperature, top_k=top_k, top_p=top_p
+            #     )
+            #     tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-change_tokens:], skip_special_tokens=True)
+            #     generated_ids = tgt_new_ids
+            #     tgt_kv = tgt_kv_candidate
+            #     correct_tokens.append({
+            #         'pos': generated_ids.shape[1]-prompt_len, 'token_num':change_tokens,
+            #         'traget':tgt_decoded_text, 'speculative':spe_decoded_text})
+            #     change_flag = False
         
         if tgt_kv is not None and tgt_kv[0][0].shape[2] > len(generated_ids[0]):
             print("wrong")
@@ -172,7 +172,7 @@ def parse_args(args=None):
     parser.add_argument('--dataset', type=str, default='AIME')
     parser.add_argument('--target_model', type=str, default='deepseek-32b')
     parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
-    parser.add_argument('--speculative_k', type=int, default=10)
+    parser.add_argument('--speculative_k', type=int, default=20)
     parser.add_argument('--accept_prob', type=float, default=0.01)
     parser.add_argument('--temperature', type=float, default=0.6)
     parser.add_argument('--topp', type=float, default=0.95)

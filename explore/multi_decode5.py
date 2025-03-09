@@ -93,12 +93,12 @@ def speculative_generate(
                 change_tokens = begin_token_num
                 begin = False
                 change_flag = True
-            elif negative_sent_num >= recap_after_negtive_num:
-                generated_ids = torch.cat([generated_ids, help_recap_words_ids], dim=-1)
-                change_tokens = recap_token_num
-                change_flag = True
-                negative_sent_num = 0
-                recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 500), min(recap_after_negtive_num+15, 50)
+            # elif negative_sent_num >= recap_after_negtive_num:
+            #     generated_ids = torch.cat([generated_ids, help_recap_words_ids], dim=-1)
+            #     change_tokens = recap_token_num
+            #     change_flag = True
+            #     negative_sent_num = 0
+            #     recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 500), min(recap_after_negtive_num+15, 50)
             else:
                 if help_think_word_ids is not None:
                     cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
@@ -172,7 +172,7 @@ def parse_args(args=None):
     parser.add_argument('--dataset', type=str, default='AIME')
     parser.add_argument('--target_model', type=str, default='deepseek-32b')
     parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
-    parser.add_argument('--speculative_k', type=int, default=10)
+    parser.add_argument('--speculative_k', type=int, default=20)
     parser.add_argument('--accept_prob', type=float, default=0.01)
     parser.add_argument('--temperature', type=float, default=0.6)
     parser.add_argument('--topp', type=float, default=0.95)
