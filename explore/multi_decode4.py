@@ -168,8 +168,8 @@ def speculative_generate(
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--start', type=int, default=0)
-    parser.add_argument('--end', type=int, default=90)
-    parser.add_argument('--dataset', type=str, default='AIME')
+    parser.add_argument('--end', type=int, default=250)
+    parser.add_argument('--dataset', type=str, default='MATH500')
     parser.add_argument('--target_model', type=str, default='deepseek-32b')
     parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
     parser.add_argument('--speculative_k', type=int, default=20)
@@ -240,7 +240,7 @@ start,end = args.start, args.end
 
 for dataset in datasets:
     math500_dataset = load_train_data(dataset).select(range(start,end))
-    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_new_{start}_{end}.json"
+    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_change_{start}_{end}.json"
 
     results = read_saved_results(output_file)
     idxs = {r['index'] for r in results}
@@ -290,17 +290,25 @@ for dataset in datasets:
     print(f"🚀 自动分配线程数: {max_workers}")
     # max_workers = 8  # 根据显存情况调整
     results_list = []  # 用于存储返回的 future 结果
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_sample, idx, sample): idx for idx, sample in enumerate(remaining_data) if idx not in idxs}
 
-        for future in tqdm(as_completed(futures), total=len(futures)):
-            try:
-                result = future.result()
-                right_flag = check_math_correctness(result['answer'], result['generated_text'])
-                print(start+result['idx']+1, ": ", right_flag)
-                results_list.append(result)  # 先存储，保证结果完整
-            except Exception as e:
-                print(f"Error processing sample {futures[future]}: {e}")
+    for idx, sample in enumerate(remaining_data):
+        if idx not in idxs:
+            print(idx, ' finished')
+            result = process_sample( idx, sample)
+            results_list.append(result) 
+            save_results(output_file, result)
+
+    # with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    #     futures = {executor.submit(process_sample, idx, sample): idx for idx, sample in enumerate(remaining_data) if idx not in idxs}
+
+    #     for future in tqdm(as_completed(futures), total=len(futures)):
+    #         try:
+    #             result = future.result()
+    #             right_flag = check_math_correctness(result['answer'], result['generated_text'])
+    #             print(start+result['idx']+1, ": ", right_flag)
+    #             results_list.append(result)  # 先存储，保证结果完整
+    #         except Exception as e:
+    #             print(f"Error processing sample {futures[future]}: {e}")
 
     # **确保最终结果按索引排序**
     results_list = sorted(results_list, key=lambda x: x["index"])

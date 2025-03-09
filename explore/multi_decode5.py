@@ -71,7 +71,7 @@ def speculative_generate(
     generated_ids = input_ids  # 直接存储 token ids
     correct_tokens = []
     begin,change_flag = False, False
-    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 10, 100, 100, 50
+    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 20, 100, 100, 25
     recap_token_num = original_recap_token_num
     while generated_ids.shape[1] < max_tokens:  # **不再手动检查 max_tokens**
         if not begin:
@@ -93,12 +93,12 @@ def speculative_generate(
                 change_tokens = begin_token_num
                 begin = False
                 change_flag = True
-            # elif negative_sent_num >= recap_after_negtive_num:
-            #     generated_ids = torch.cat([generated_ids, help_recap_words_ids], dim=-1)
-            #     change_tokens = recap_token_num
-            #     change_flag = True
-            #     negative_sent_num = 0
-            #     recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 500), min(recap_after_negtive_num+15, 50)
+            elif negative_sent_num >= recap_after_negtive_num:
+                generated_ids = torch.cat([generated_ids, help_recap_words_ids], dim=-1)
+                change_tokens = recap_token_num
+                change_flag = True
+                negative_sent_num = 0
+                recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 200), min(recap_after_negtive_num+5, 30)
             else:
                 if help_think_word_ids is not None:
                     cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
@@ -120,7 +120,7 @@ def speculative_generate(
                     # **解码 Target Model 生成的文本**
                     tgt_decoded_text = tokenizer.decode(tgt_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
                     tgt_sent = sentiment_analysis(tgt_decoded_text, TARGET_VALIDATION_KEYWORDS['positive'], TARGET_VALIDATION_KEYWORDS['negative']+TARGET_VALIDATION_KEYWORDS['verify'])
-                    if (spe_sent<0 and tgt_sent >=0) or (spe_sent>0 and tgt_sent<0):
+                    if True: #(spe_sent<0 and tgt_sent >=0) or (spe_sent>0 and tgt_sent<0):
                         generated_ids = tgt_new_ids # torch.cat([cache_generated_ids, tgt_new_ids[:, :]], dim=-1)  # ✅ 接受 Target Model 结果
                         tgt_kv = tgt_kv_candidate  # ✅ 只有在接受 Target Model 结果时才更新 `tgt_kv`
                         decode_text = tgt_decoded_text
@@ -137,7 +137,7 @@ def speculative_generate(
                     if contains_keywords(decode_text, TARGET_VALIDATION_KEYWORDS['verify']):
                         change_tokens = original_recap_token_num
                         change_flag = True
-                        # negative_sent_num = 0
+                        negative_sent_num = 0
             if change_flag:
                 try_correct_num = try_correct_num+1
                 tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
@@ -168,8 +168,8 @@ def speculative_generate(
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--start', type=int, default=0)
-    parser.add_argument('--end', type=int, default=90)
-    parser.add_argument('--dataset', type=str, default='AIME')
+    parser.add_argument('--end', type=int, default=250)
+    parser.add_argument('--dataset', type=str, default='MATH500')
     parser.add_argument('--target_model', type=str, default='deepseek-32b')
     parser.add_argument('--speculative_model', type=str, default='deepseek-1.5b') 
     parser.add_argument('--speculative_k', type=int, default=20)
@@ -214,7 +214,7 @@ if __name__ == '__main__':
 
 # **触发 Token & 关键词**
 TRIGGER_TOKENS = {"\n\n"}  # 遇到这些 token 触发 Target Model
-TARGET_VALIDATION_KEYWORDS = {'verify':['verify', 'think again', 'recap', 'check'],
+TARGET_VALIDATION_KEYWORDS = {'verify':['verify', 'think again', 'recap', 'double-check'],
                               "negative":['but', 'wait', "alternatively", 'hold on','another'],
                               "positive":['yeah','yes','final answer','confident']}  # 目标关键字
 help_think_word = None # '\n\n'
@@ -240,7 +240,7 @@ start,end = args.start, args.end
 
 for dataset in datasets:
     math500_dataset = load_train_data(dataset).select(range(start,end))
-    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_new_{start}_{end}.json"
+    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_verify_{start}_{end}.json"
 
     results = read_saved_results(output_file)
     idxs = {r['index'] for r in results}
@@ -290,17 +290,25 @@ for dataset in datasets:
     print(f"🚀 自动分配线程数: {max_workers}")
     # max_workers = 8  # 根据显存情况调整
     results_list = []  # 用于存储返回的 future 结果
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_sample, idx, sample): idx for idx, sample in enumerate(remaining_data) if idx not in idxs}
 
-        for future in tqdm(as_completed(futures), total=len(futures)):
-            try:
-                result = future.result()
-                right_flag = check_math_correctness(result['answer'], result['generated_text'])
-                print(start+result['idx']+1, ": ", right_flag)
-                results_list.append(result)  # 先存储，保证结果完整
-            except Exception as e:
-                print(f"Error processing sample {futures[future]}: {e}")
+    for idx, sample in enumerate(remaining_data):
+        if idx not in idxs:
+            print(idx, ' finished')
+            result = process_sample( idx, sample)
+            results_list.append(result) 
+            save_results(output_file, result)
+
+    # with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    #     futures = {executor.submit(process_sample, idx, sample): idx for idx, sample in enumerate(remaining_data) if idx not in idxs}
+
+    #     for future in tqdm(as_completed(futures), total=len(futures)):
+    #         try:
+    #             result = future.result()
+    #             right_flag = check_math_correctness(result['answer'], result['generated_text'])
+    #             print(start+result['idx']+1, ": ", right_flag)
+    #             results_list.append(result)  # 先存储，保证结果完整
+    #         except Exception as e:
+    #             print(f"Error processing sample {futures[future]}: {e}")
 
     # **确保最终结果按索引排序**
     results_list = sorted(results_list, key=lambda x: x["index"])
