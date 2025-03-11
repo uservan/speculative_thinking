@@ -71,7 +71,7 @@ def speculative_generate(
     generated_ids = input_ids  # 直接存储 token ids
     correct_tokens = []
     begin,change_flag = False, False
-    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 10, 100, 100, 50
+    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 15, 100, 100, 25
     recap_token_num = original_recap_token_num
     while generated_ids.shape[1] < max_tokens:  # **不再手动检查 max_tokens**
         if not begin:
@@ -98,7 +98,7 @@ def speculative_generate(
                 change_tokens = recap_token_num
                 change_flag = True
                 negative_sent_num = 0
-                recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 500), min(recap_after_negtive_num+15, 50)
+                recap_token_num, recap_after_negtive_num= min(recap_token_num + add_each_recap, 200), min(recap_after_negtive_num+5, 30)
             else:
                 if help_think_word_ids is not None:
                     cache_generated_ids = torch.cat([generated_ids, help_think_word_ids], dim=-1)
@@ -233,14 +233,14 @@ if args.speculative_model is not None:
     speculative_model = [AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto") for i in range(1)]
 help_think_word_ids = None if help_think_word is None else tokenizer([help_think_word], return_tensors="pt").input_ids.to("cuda")
 # Let me summarize and recap to make sure I didn't make any mistakes
-help_recap_words_ids = tokenizer(["Let me shortly summarize and check previous thoughts to make sure I didn't make any mistakes"], return_tensors="pt").input_ids.to("cuda")
+help_recap_words_ids = tokenizer(["Let me check whether there are some wrong steps "], return_tensors="pt").input_ids.to("cuda")
 datasets = args.dataset.split(',')
 
 start,end = args.start, args.end
 
 for dataset in datasets:
     math500_dataset = load_train_data(dataset).select(range(start,end))
-    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_new_{start}_{end}.json"
+    output_file = f"./results/{dataset}_{args.target_model}_{args.speculative_model}_choose_{start}_{end}.json"
 
     results = read_saved_results(output_file)
     idxs = {r['index'] for r in results}
@@ -271,7 +271,7 @@ for dataset in datasets:
             generated_ids_hf = generate_hf(target_model_, tokenizer, input_ids, args.max_tokens,
                         temperature=args.temperature, top_p=args.topp)
             generated_text = tokenizer.decode(generated_ids_hf[0,prompt_len:], skip_special_tokens=True)
-            num_tokens, correct_tokens,try_correct_num = None, None, None
+            num_tokens, correct_tokens,try_correct_num = generated_ids_hf.shape[1], [], 0
         end_time = time.time()  # 记录结束时间
         generation_time = end_time - start_time  # 计算生成时间
         return {
@@ -296,8 +296,6 @@ for dataset in datasets:
         for future in tqdm(as_completed(futures), total=len(futures)):
             try:
                 result = future.result()
-                right_flag = check_math_correctness(result['answer'], result['generated_text'])
-                print(start+result['idx']+1, ": ", right_flag)
                 results_list.append(result)  # 先存储，保证结果完整
             except Exception as e:
                 print(f"Error processing sample {futures[future]}: {e}")

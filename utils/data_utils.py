@@ -2,6 +2,12 @@ from datasets import load_dataset
 from .utils import cache_dir
 import os
 import json
+import yaml
+
+def read_yml(path):
+    with open(path, "r", encoding="utf-8") as file:
+        config = yaml.safe_load(file)
+    return config
 
 def save_results(out_path, data):
     if os.path.exists(out_path):

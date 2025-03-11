@@ -233,7 +233,7 @@ if args.speculative_model is not None:
     speculative_model = [AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto") for i in range(1)]
 help_think_word_ids = None if help_think_word is None else tokenizer([help_think_word], return_tensors="pt").input_ids.to("cuda")
 # Let me summarize and recap to make sure I didn't make any mistakes
-help_recap_words_ids = tokenizer(["Let me shortly summarize and check previous thoughts to make sure I didn't make any mistakes"], return_tensors="pt").input_ids.to("cuda")
+help_recap_words_ids = tokenizer(["Let me check whether there are some wrong steps "], return_tensors="pt").input_ids.to("cuda")
 datasets = args.dataset.split(',')
 
 start,end = args.start, args.end
@@ -304,8 +304,6 @@ for dataset in datasets:
     #     for future in tqdm(as_completed(futures), total=len(futures)):
     #         try:
     #             result = future.result()
-    #             right_flag = check_math_correctness(result['answer'], result['generated_text'])
-    #             print(start+result['idx']+1, ": ", right_flag)
     #             results_list.append(result)  # 先存储，保证结果完整
     #         except Exception as e:
     #             print(f"Error processing sample {futures[future]}: {e}")
