@@ -28,7 +28,7 @@ help_recap_words: "Let me check whether there are some wrong steps:"
 
 
 choose_large: true
-max_target_tokens: 15
+max_target_tokens: 20
 begin: false
 begin_token_num: 100
 original_recap_token_num: 125
