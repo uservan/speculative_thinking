@@ -130,7 +130,8 @@ def inference(llm, conversations, max_tokens, temp, args):
     if args.spe_config is not None:
         from speculative.speculative_thinking import process_message
         responses = []
-        for con in tqdm(conversations):
+        for i in tqdm(range(len(conversations))):
+            con = conversations[i]
             res = []
             for _ in range(args.n):
                 r = process_message(con, llm, max_tokens, temp, top_p=args.top_p)
@@ -138,7 +139,7 @@ def inference(llm, conversations, max_tokens, temp, args):
                 else: 
                     r['question'] = llm.get_prompt_len(con)
                     res.append(r)
-            if len(res) == args.n: responses.append(Response.from_spe_response(res))
+            if len(res) == args.n: responses.append(Response.from_spe_response(res, i))
     elif args.use_ray:
         responses = fetch_responses_ray(conversations, max_tokens, temp, args)
         responses = [
@@ -221,6 +222,7 @@ def perform_inference_and_check(
             future_to_task = {}
             token_usages = {}
             for idx, response in enumerate(responses):
+                if response.index is not None: idx = response.index
                 for sample_idx in range(args.n):
                     # response_entry at this point doesn't contain correctness check.
                     response_entry, token_usage_for_response = _parse_response_for_idx(
@@ -472,6 +474,7 @@ def perform_inference_and_save(
         completion_tokens = []
         prompt_tokens = []
         for idx, response in enumerate(responses):
+            if response.index is not None: idx = response.index
             response_entries = []
             token_usages = []
             completion_token = 0

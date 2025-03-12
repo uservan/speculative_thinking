@@ -21,9 +21,10 @@ class Response:
     num_try_correct: List[int] = field(default_factory=list)
 
     @classmethod
-    def from_spe_response(cls, response) -> "Response":
+    def from_spe_response(cls, response, idx) -> "Response":
         new_r = regroup_list_of_dicts(response) 
         return cls(
+            index = idx,
             response=new_r['generated_text'],
             num_completion_tokens=new_r['num_tokens'],
             num_input_tokens=new_r["question"][0],
