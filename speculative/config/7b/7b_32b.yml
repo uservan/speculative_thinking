@@ -1,0 +1,39 @@
+mode: "vllm" # 'hf' or "vllm"
+target_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+speculative_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+target_model_gpu: 2
+speculative_model_gpu: 1
+
+TRIGGER_TOKENS:
+  - "\n\n"
+TARGET_VALIDATION_KEYWORDS:
+  verify:
+    - "verify"
+    - "think again"
+    - "recap"
+    - "check"
+  negative:
+    - "wait"
+    - "alternatively"
+    - "hold on"
+    - "another"
+  positive:
+    - "yeah"
+    - "yes"
+    - "final answer"
+    - "confident"
+help_think_word: null
+help_recap_words: "Let me check whether there are some wrong steps:"
+
+
+choose_large: true
+max_target_tokens: 20
+begin: false
+begin_token_num: 100
+original_recap_token_num: 125
+recap_after_negative_num: 15
+add_each_recap: 25
+add_each_neg: 5
+max_recap_token_num: 200
+max_negative_num: 30
+time_out: 300

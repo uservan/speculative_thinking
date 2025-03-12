@@ -71,7 +71,7 @@ def speculative_generate(
     generated_ids = input_ids  # 直接存储 token ids
     correct_tokens = []
     begin,change_flag = False, False
-    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 15, 100, 100, 25
+    negative_sent_num, recap_after_negtive_num, original_recap_token_num, begin_token_num, add_each_recap = 0, 25, 100, 100, 25
     recap_token_num = original_recap_token_num
     while generated_ids.shape[1] < max_tokens:  # **不再手动检查 max_tokens**
         if not begin:
@@ -233,8 +233,8 @@ if args.speculative_model is not None:
     speculative_model = [AutoModelForCausalLM.from_pretrained(speculative_model_name, torch_dtype=torch.float16, device_map="auto") for i in range(1)]
 help_think_word_ids = None if help_think_word is None else tokenizer([help_think_word], return_tensors="pt").input_ids.to("cuda")
 # Let me summarize and recap to make sure I didn't make any mistakes
-# Let me shortly summarize and check previous thoughts to make sure I didn't make any mistakes
-help_recap_words_ids = tokenizer(["Let me check whether there are some wrong steps "], return_tensors="pt").input_ids.to("cuda")
+# "Let me shortly summarize and check previous thoughts to make sure I didn't make any mistakes"
+help_recap_words_ids = tokenizer(["Let me shortly check whether it is right to "], return_tensors="pt").input_ids.to("cuda")
 datasets = args.dataset.split(',')
 
 start,end = args.start, args.end
