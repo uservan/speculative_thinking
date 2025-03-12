@@ -13,7 +13,6 @@ TARGET_VALIDATION_KEYWORDS:
     - "recap"
     - "check"
   negative:
-    - "but"
     - "wait"
     - "alternatively"
     - "hold on"
