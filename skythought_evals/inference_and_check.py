@@ -9,7 +9,7 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from typing import Dict, Tuple
-
+import torch
 import numpy as np
 import ray
 from openai import OpenAI
@@ -816,7 +816,7 @@ def main():
         choices=["float32", "auto", "float16", "bfloat16"],
         help="dtype for inference with vLLM. Full-precision by default."
         "'auto' refers to automatically inferring dtype for the model",
-        default="float32",
+        default="float16",
     )
     parser.add_argument(
         "--top_p",
@@ -825,7 +825,7 @@ def main():
         help="Sampling parameter `top_p`",
     )
     parser.add_argument(
-        "--spe_config", type=str, default='/home/wxy320/ondemand/program/speculative_thinking/speculative/spe_setting.yml', help="Path to speculative thinking config"
+        "--spe_config", type=str, default=None, help="Path to speculative thinking config"
     )
     args = parser.parse_args()
     # load ray config
@@ -839,7 +839,8 @@ def main():
             # load default
             args.ray_config = os.path.join(module_dir, DEFAULT_RAY_CONFIG_RELATIVE_PATH)
     set_seed(args.seed)
-
+    # os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, range(args.tp)))
+    # print(os.environ['CUDA_VISIBLE_DEVICES'], torch.cuda.device_count())
     # enable hf_transfer if not overriden by the user
     if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", None) is None:
         os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
@@ -928,7 +929,7 @@ def main():
                 OpenAI()
                 if args.model.startswith("openai")
                 else LLM(
-                    model=args.model, tensor_parallel_size=args.tp, dtype=args.dtype
+                    model=args.model, tensor_parallel_size=args.tp, dtype=args.dtype, # swap_space=32
                 )
                 # speculative model
             )

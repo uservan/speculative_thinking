@@ -10,11 +10,11 @@ from vllm import LLM, SamplingParams
 import ray
 import time
 
-def create_ray_model(model_name, target_model_gpu):
+def create_ray_model(model_name, target_model_gpu, dtype='float16'):
     @ray.remote(num_gpus=target_model_gpu)
     class ModelWorkerSingleGPU:
         def __init__(self, model_name: str):
-            self.model = LLM(model=model_name, tensor_parallel_size=target_model_gpu)
+            self.model = LLM(model=model_name, tensor_parallel_size=target_model_gpu, dtype=dtype)
         def generate(self, generated_ids, sampling_params):
             outputs = self.model.generate(
                 prompt_token_ids=generated_ids, 

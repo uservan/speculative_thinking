@@ -47,7 +47,7 @@ class spe_thinking_hf:
         generated_ids_hf = generate_hf(self.target_model,  self.tokenizer, input_ids, max_tokens,
                     temperature=temperature, top_p=top_p, top_k=top_k)
         generated_text = self.tokenizer.decode(generated_ids_hf[0,:], skip_special_tokens=True)
-        num_tokens, correct_tokens,try_correct_num = generated_ids_hf.shape[1], [], 0
+        num_tokens, correct_tokens,try_correct_num = generated_ids_hf.shape[1]-prompt_len, [], 0
         return generated_text, num_tokens, correct_tokens, try_correct_num
 
     def speculative_generate(self, messages=None, max_tokens=100, temperature=0.6, top_k=50, top_p=0.95):

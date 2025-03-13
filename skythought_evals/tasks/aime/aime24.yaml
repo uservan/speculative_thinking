@@ -4,6 +4,6 @@ dataset_split: train
 question_key: problem
 answer_key: answer
 templating_parameters:
-  template: "Please reason step by step, and put your final answer within \\boxed{{}}. {problem} <think>\n"
+  template: "Please reason step by step, and put your final answer within \\boxed{{}}. {prompt} <think>\n"
 preprocess_config:
   url: "2024"

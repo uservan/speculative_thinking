@@ -38,7 +38,7 @@ def parse_arguments():
         "--n", type=str, default='5', help="Number of samples generated per problem."
     )
     parser.add_argument(
-        "--spe_config", type=str, default='/home/wxy320/ondemand/program/speculative_thinking/speculative/spe_setting.yml', help="Path to speculative thinking config"
+        "--spe_config", type=str, default=None, help="Path to speculative thinking config"
     )
     parser.add_argument(
         "--result-dir", type=str, default="./eval", help="Directory to save result files."
@@ -115,11 +115,11 @@ def main():
                 args.n,
                 "--result-dir",
                 args.result_dir,
-                 "--spe_config",
-                args.spe_config,
             ]
         )
-
+        if args.spe_config:
+            command.append("--spe_config")
+            command.append(args.spe_config)
         if args.difficulty:
             command.append("--difficulty")
             command.append(args.difficulty)
