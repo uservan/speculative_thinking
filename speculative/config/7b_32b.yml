@@ -1,6 +1,6 @@
 mode: "vllm" # 'hf' or "vllm"
-target_model_name: "Qwen/QwQ-32B"
-speculative_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+target_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+speculative_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 target_model_gpu: 2
 speculative_model_gpu: 1
 
@@ -36,4 +36,4 @@ add_each_recap: 25
 add_each_neg: 5
 max_recap_token_num: 200
 max_negative_num: 30
-time_out: 300
+time_out: 180

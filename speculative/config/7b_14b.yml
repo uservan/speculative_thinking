@@ -36,4 +36,4 @@ add_each_recap: 25
 add_each_neg: 5
 max_recap_token_num: 200
 max_negative_num: 30
-time_out: 300
+time_out: 180
