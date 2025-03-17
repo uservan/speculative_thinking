@@ -1,5 +1,5 @@
-from __init__ import *
-from speculative.utils import *
+import __init__
+from speculative.spe_utils import *
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2ForCausalLM
@@ -143,14 +143,15 @@ class spe_thinking_vllm:
 
 
 if __name__ == "__main__":
-    yml_path = '/home/wxy320/ondemand/program/speculative_thinking/speculative/spe_setting.yml'
+    yml_path = '/home/wxy320/ondemand/program/speculative_thinking/speculative/config/nromal/32B.yml'
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = spe_thinking_vllm(yml_path)
+    config = read_yml(yml_path)
+    model = spe_thinking_vllm(**config)
     messages = []
     messages.append({
         "role": "user",
         "content": "Please reason step by step, and put your final answer within \\boxed{{}}. " + 'how to define the question?' + ' <think>\n'
     })
 
-    model.speculative_generate(messages, 1024, 10)
+    model.generate(messages, 1024)
