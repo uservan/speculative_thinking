@@ -28,6 +28,7 @@ class spe_thinking_hf:
         self.TRIGGER_TOKENS = config['TRIGGER_TOKENS']
         self.TARGET_VALIDATION_KEYWORDS = config['TARGET_VALIDATION_KEYWORDS']
         self.choose_large = config['choose_large']
+        self.not_reasoning = config.get('not_reasoning', False)
         self.config = config
 
     def get_prompt_len(self,messages ):
@@ -77,6 +78,8 @@ class spe_thinking_hf:
                     change_tokens = self.config['begin_token_num']
                     begin = False
                     change_flag = True
+                    tgt_kv_candidate=None
+                    spe_decoded_text = ''
                 elif negative_sent_num >= recap_after_negtive_num:
                     generated_ids = torch.cat([generated_ids, self.help_recap_words_ids], dim=-1)
                     change_tokens = recap_token_num
@@ -94,7 +97,7 @@ class spe_thinking_hf:
                     )
                     spe_decoded_text =self.tokenizer.decode(spe_new_ids[0,-max_target_tokens:], skip_special_tokens=True)
                     spe_sent = sentiment_analysis(spe_decoded_text, self.TARGET_VALIDATION_KEYWORDS['positive'], self.TARGET_VALIDATION_KEYWORDS['negative']+self.TARGET_VALIDATION_KEYWORDS['verify'])
-                    if spe_sent != 0:
+                    if self.not_reasoning or spe_sent != 0:
                         try_correct_num = try_correct_num+1
                         # **Step 3: 目标模型生成 max_target_tokens 个 token**
                         tgt_new_ids, tgt_kv_candidate = generate_with_partial_kv(
@@ -127,7 +130,7 @@ class spe_thinking_hf:
                        self.target_model, self.tokenizer, generated_ids, tgt_kv_candidate,
                         max_new_tokens=change_tokens, temperature=temperature, top_k=top_k, top_p=top_p
                     )
-                    tgt_decoded_text = self.tokenizer.decode(tgt_new_ids[0,-change_tokens:], skip_special_tokens=True)
+                    tgt_decoded_text = self.tokenizer.decode(generated_ids[0,-change_tokens:], skip_special_tokens=True)
                     correct_tokens.append({
                         'pos': generated_ids.shape[1]-prompt_len, 'token_num':change_tokens,
                         'traget':tgt_decoded_text, 'speculative':spe_decoded_text})

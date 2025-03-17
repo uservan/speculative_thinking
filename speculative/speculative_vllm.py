@@ -44,6 +44,7 @@ class spe_thinking_vllm:
         self.TRIGGER_TOKENS = config['TRIGGER_TOKENS']
         self.TARGET_VALIDATION_KEYWORDS = config['TARGET_VALIDATION_KEYWORDS']
         self.choose_large = config['choose_large']
+        self.not_reasoning = config.get('not_reasoning', False)
         self.config = config
 
     def generate(self, messages=None, max_tokens=1024, temperature=0.6, top_k=50, top_p=0.95):
@@ -93,6 +94,8 @@ class spe_thinking_vllm:
                     change_tokens = self.config['begin_token_num']
                     begin = False
                     change_flag = True
+                    tgt_kv_candidate=None
+                    spe_decoded_text = ''
                 elif negative_sent_num >= recap_after_negtive_num:
                     generated_ids.extend(self.help_recap_words_ids)
                     change_tokens = recap_token_num
@@ -105,7 +108,7 @@ class spe_thinking_vllm:
                     spe_ids = get_ray_reuslt(self.speculative_model, generated_ids, tgt_sampling_params_cache)
                     spe_token = self.tokenizer.decode(spe_ids, skip_special_tokens=True)
                     spe_sent = sentiment_analysis(spe_token, self.TARGET_VALIDATION_KEYWORDS['positive'], self.TARGET_VALIDATION_KEYWORDS['negative']+self.TARGET_VALIDATION_KEYWORDS['verify'])
-                    if spe_sent != 0:
+                    if self.not_reasoning or spe_sent != 0:
                         try_correct_num = try_correct_num+1
                         tgt_ids = get_ray_reuslt(self.target_model, generated_ids, tgt_sampling_params_cache)
                         tgt_token = self.tokenizer.decode(tgt_ids, skip_special_tokens=True)

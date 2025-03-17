@@ -786,7 +786,7 @@ def main():
         choices=get_system_prompt_keys(),
     )
     parser.add_argument(
-        "--n", type=int, default=5, help="Number of samples generated per problem."
+        "--n", type=int, default=1, help="Number of samples generated per problem."
     )
     parser.add_argument("--seed", type=int, default=41, help="Random seed.")
     parser.add_argument(
@@ -825,7 +825,7 @@ def main():
         help="Sampling parameter `top_p`",
     )
     parser.add_argument(
-        "--spe_config", type=str, default=None, help="Path to speculative thinking config"
+        "--spe_config", type=str, default='/home/wxy320/ondemand/program/speculative_thinking/speculative/config/7b-instruct_1b.yml', help="Path to speculative thinking config"
     )
     args = parser.parse_args()
     # load ray config

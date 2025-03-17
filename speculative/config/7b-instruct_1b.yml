@@ -1,11 +1,11 @@
-mode: "vllm" # 'hf' or "vllm"
-target_model_name: "Qwen/QwQ-32B"
-speculative_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-target_model_gpu: 2
+mode: "hf" # 'hf' or "vllm"
+target_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+speculative_model_name: "Qwen/Qwen2.5-7B-Instruct"
+target_model_gpu: 1
 speculative_model_gpu: 1
 
 TRIGGER_TOKENS:
-  - "\n\n"
+  - "\n"
 TARGET_VALIDATION_KEYWORDS:
   verify:
     - "verify"
@@ -22,13 +22,13 @@ TARGET_VALIDATION_KEYWORDS:
     - "yes"
     - "final answer"
     - "confident"
-help_think_word: null
+help_think_word: "\n"
 help_recap_words: "Let me check whether there are some wrong steps:"
 
-
+not_reasoning: true
 choose_large: true
 max_target_tokens: 20
-begin: false
+begin: true
 begin_token_num: 100
 original_recap_token_num: 125
 recap_after_negative_num: 15
@@ -36,4 +36,4 @@ add_each_recap: 25
 add_each_neg: 5
 max_recap_token_num: 200
 max_negative_num: 30
-time_out: 300
+time_out: -1
