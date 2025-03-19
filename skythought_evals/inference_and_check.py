@@ -129,6 +129,7 @@ def _parse_response_for_idx(
 def inference(llm, conversations, max_tokens, temp, args):
     if args.spe_config is not None:
         from speculative.speculative_thinking import process_message
+        r = process_message(conversations[0], llm, max_tokens, temp, top_p=args.top_p)
         responses = []
         for i in tqdm(range(len(conversations))):
             con = conversations[i]
@@ -816,7 +817,7 @@ def main():
         choices=["float32", "auto", "float16", "bfloat16"],
         help="dtype for inference with vLLM. Full-precision by default."
         "'auto' refers to automatically inferring dtype for the model",
-        default="float16",
+        default="bfloat16",
     )
     parser.add_argument(
         "--top_p",
@@ -825,7 +826,7 @@ def main():
         help="Sampling parameter `top_p`",
     )
     parser.add_argument(
-        "--spe_config", type=str, default='/home/wxy320/ondemand/program/speculative_thinking/speculative/config/7b-instruct_1b.yml', help="Path to speculative thinking config"
+        "--spe_config", type=str, default='/home/wxy320/ondemand/program/speculative_thinking/speculative/config/nromal/32B.yml', help="Path to speculative thinking config"
     )
     args = parser.parse_args()
     # load ray config

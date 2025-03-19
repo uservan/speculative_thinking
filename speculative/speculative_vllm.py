@@ -10,11 +10,12 @@ from vllm import LLM, SamplingParams
 import ray
 import time
 
-def create_ray_model(model_name, target_model_gpu, dtype='float16'):
+def create_ray_model(model_name, target_model_gpu, dtype='bfloat16'):
     @ray.remote(num_gpus=target_model_gpu)
     class ModelWorkerSingleGPU:
         def __init__(self, model_name: str):
-            self.model = LLM(model=model_name, tensor_parallel_size=target_model_gpu, dtype=dtype)
+            self.model = LLM(model=model_name, tensor_parallel_size=target_model_gpu, dtype=dtype,
+                             enable_prefix_caching=True)
         def generate(self, generated_ids, sampling_params):
             outputs = self.model.generate(
                 prompt_token_ids=generated_ids, 
@@ -140,6 +141,8 @@ class spe_thinking_vllm:
                     generated_ids.extend(tgt_ids)
                     change_flag = False
             token_num = len(generated_ids)
+            if self.tokenizer.eos_token_id in generated_ids[-self.config['max_target_tokens']:]: 
+                break
         generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
         return generated_text, len(generated_ids)-prompt_len, correct_tokens, try_correct_num
         
