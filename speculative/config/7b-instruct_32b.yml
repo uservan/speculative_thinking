@@ -1,4 +1,4 @@
-mode: "hf" # 'hf' or "vllm"
+mode: "vllm" # 'hf' or "vllm"
 target_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
 speculative_model_name: "Qwen/Qwen2.5-7B-Instruct"
 target_model_gpu: 1
