@@ -826,7 +826,7 @@ def main():
         help="Sampling parameter `top_p`",
     )
     parser.add_argument(
-        "--spe_config", type=str, default='/home/wxy320/ondemand/program/speculative_thinking/speculative/config/nromal/32B.yml', help="Path to speculative thinking config"
+        "--spe_config", type=str, default=None, help="Path to speculative thinking config"
     )
     args = parser.parse_args()
     # load ray config
