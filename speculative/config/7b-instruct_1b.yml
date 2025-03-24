@@ -1,7 +1,7 @@
 mode: "vllm" # 'hf' or "vllm"
 target_model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 speculative_model_name: "Qwen/Qwen2.5-7B-Instruct"
-target_model_gpu: 1
+target_model_gpu: 2
 speculative_model_gpu: 1
 
 TRIGGER_TOKENS:
