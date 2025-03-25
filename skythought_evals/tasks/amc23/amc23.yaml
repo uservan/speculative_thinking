@@ -9,4 +9,4 @@ answer_key: answer
 # preprocess_config:
 #   difficulty: easy
 templating_parameters: 
-  template: "Return your final response within \\boxed{{}}. {problem}"
+  template: "Please reason step by step, and put your final answer within \\boxed{{}}. {problem} <think>\n"  # "Return your final response within \\boxed{{}}. {problem}" #
