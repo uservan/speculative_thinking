@@ -41,7 +41,9 @@ def benchmark_final_token_latency_by_prompt_len(
             use_cache=True,
             return_dict_in_generate=True,
             past_key_values=copy.deepcopy(past_key_values),
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=None,  # 禁用停止
+            early_stopping=False  # 确保不会提前停止
         )
         torch.cuda.synchronize()
         t_generate_n = time.time() - t0
@@ -63,7 +65,9 @@ def benchmark_final_token_latency_by_prompt_len(
             use_cache=True,
             return_dict_in_generate=True,
             past_key_values=copy.deepcopy(past_key_values),
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=None,  # 禁用停止
+            early_stopping=False  # 确保不会提前停止
         )
         torch.cuda.synchronize()
         t_generate_last = time.time() - t1

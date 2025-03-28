@@ -108,6 +108,31 @@ class Response:
             num_input_tokens=len(response.prompt_token_ids),
         )
 
+    @classmethod
+    def from_spe_decoding_response(cls, response) -> "Response":
+        """
+        Factory method to create a Response instance from a vLLM response.
+
+        Args:
+            response: vLLM response object containing output text and token information
+
+        Returns:
+            Responses: New instance initialized with vLLM response data
+        """
+        response_texts = [
+            response.outputs[i].text for i in range(len(response.outputs))
+        ]
+        num_completion_tokens = [
+            len(response.outputs[i].token_ids) for i in range(len(response.outputs))
+        ]
+        correct_tokens = response.metrics.spec_token_acceptance_counts
+        return cls(
+            num_correct_tokens=correct_tokens,
+            response=response_texts,
+            num_completion_tokens=num_completion_tokens,
+            num_input_tokens=len(response.prompt_token_ids),
+        )
+
 
 @dataclass
 class SingleParsedResponse:

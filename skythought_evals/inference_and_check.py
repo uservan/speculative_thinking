@@ -31,7 +31,7 @@ from skythought_evals.util.common import set_seed
 from skythought_evals.util.metrics import pass_at_k
 from skythought_evals.util.response import Response, SingleParsedResponse
 from tqdm import tqdm
-from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams, EngineArgs
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_RAY_CONFIG_RELATIVE_PATH = "ray_configs/ray_config.yaml"
@@ -141,6 +141,14 @@ def inference(llm, conversations, max_tokens, temp, args):
                     r['question'] = llm.get_prompt_len(con)
                     res.append(r)
             if len(res) == args.n: responses.append(Response.from_spe_response(res, i))
+    elif args.draft_model is not None:
+        sampling_params = SamplingParams(
+            max_tokens=max_tokens, temperature=temp, n=args.n, top_p=args.top_p
+        )
+        responses = llm.chat(
+            messages=conversations, sampling_params=sampling_params, use_tqdm=True
+        )
+        responses = [Response.from_spe_decoding_response(response) for response in responses]
     elif args.use_ray:
         responses = fetch_responses_ray(conversations, max_tokens, temp, args)
         responses = [
@@ -712,17 +720,17 @@ def main():
     parser.add_argument(
         "--task",
         type=str,
-        default='math500',
+        default='aime24',
         choices=TASK_NAMES_TO_YAML.keys(),
         help="Task to process.",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default='deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B',
+        default='deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
         help="The model to run.",
     )
-    parser.add_argument("--tp", type=int, default=8, help="Tensor Parallelism Degree")
+    parser.add_argument("--tp", type=int, default=2, help="Tensor Parallelism Degree")
     parser.add_argument(
         "--max_tokens", type=int, default=32768, help="Max tokens for the model."
     )
@@ -828,6 +836,12 @@ def main():
     parser.add_argument(
         "--spe_config", type=str, default=None, help="Path to speculative thinking config"
     )
+    parser.add_argument(
+        "--draft_model", type=str, default='deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', help="Path to speculative thinking config"
+    )
+    parser.add_argument(
+        "--num_speculative_tokens", type=int, default=5, help="Path to speculative thinking config"
+    )
     args = parser.parse_args()
     # load ray config
     if args.use_ray:
@@ -925,6 +939,22 @@ def main():
         elif args.spe_config is not None:
             from speculative.speculative_thinking import load_spe_model
             llm = load_spe_model(args.spe_config)
+        elif args.draft_model is not None:
+            # llm = LLM(
+            #     model=args.model, tensor_parallel_size=args.tp, dtype=args.dtype,
+            #     speculative_config={
+            #         "model": args.draft_model,
+            #         "num_speculative_tokens": args.num_speculative_tokens,
+            #         "draft_tensor_parallel_size": 1,
+            #         # "use_v2_block_manager": True
+            #     },
+            # )
+            llm = LLM(
+                model=args.model, tensor_parallel_size=args.tp, dtype=args.dtype,
+                speculative_model=args.draft_model,
+                num_speculative_tokens=args.num_speculative_tokens,
+                use_v2_block_manager=True,
+            )
         else:
             llm = (
                 OpenAI()
