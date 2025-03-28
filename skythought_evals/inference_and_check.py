@@ -153,7 +153,6 @@ def inference(llm, conversations, max_tokens, temp, args):
             res = []
             r = llm.chat( messages=[con], sampling_params=sampling_params, use_tqdm=True)
             responses.append(r[0])
-            break
         responses = [Response.from_spe_decoding_response(response) for response in responses]
     elif args.use_ray:
         responses = fetch_responses_ray(conversations, max_tokens, temp, args)
