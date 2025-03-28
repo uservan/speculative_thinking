@@ -142,12 +142,15 @@ def inference(llm, conversations, max_tokens, temp, args):
                     res.append(r)
             if len(res) == args.n: responses.append(Response.from_spe_response(res, i))
     elif args.draft_model is not None:
+        responses = []
         sampling_params = SamplingParams(
             max_tokens=max_tokens, temperature=temp, n=args.n, top_p=args.top_p
         )
-        responses = llm.chat(
-            messages=conversations, sampling_params=sampling_params, use_tqdm=True
-        )
+        for i in tqdm(range(len(conversations))):
+            con = conversations[i]
+            res = []
+            r = llm.chat( messages=[con], sampling_params=sampling_params, use_tqdm=True)
+            responses.append(r[0])
         responses = [Response.from_spe_decoding_response(response) for response in responses]
     elif args.use_ray:
         responses = fetch_responses_ray(conversations, max_tokens, temp, args)
