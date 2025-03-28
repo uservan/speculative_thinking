@@ -19,6 +19,7 @@ class Response:
     num_time_spend: List[float] = field(default_factory=list)
     num_correct_tokens: List = field(default_factory=list)
     num_try_correct: List[int] = field(default_factory=list)
+    num_accept: List[int] = field(default_factory=list)
 
     @classmethod
     def from_spe_response(cls, response, idx) -> "Response":
@@ -127,7 +128,7 @@ class Response:
         ]
         correct_tokens = response.metrics.spec_token_acceptance_counts
         return cls(
-            num_correct_tokens=correct_tokens,
+            num_accept=correct_tokens,
             response=response_texts,
             num_completion_tokens=num_completion_tokens,
             num_input_tokens=len(response.prompt_token_ids),

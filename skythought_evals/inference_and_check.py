@@ -123,6 +123,8 @@ def _parse_response_for_idx(
         token_usage_for_response['correct_tokens'] = response.num_correct_tokens[sample_idx]
         token_usage_for_response['time_spend'] = response.num_time_spend[sample_idx]
         token_usage_for_response['try_correct'] = response.num_try_correct[sample_idx]
+    if len(response.num_accept) > 0:
+        token_usage_for_response['correct_tokens'] = response.num_accept
     return response_entry, token_usage_for_response
 
 
@@ -151,6 +153,7 @@ def inference(llm, conversations, max_tokens, temp, args):
             res = []
             r = llm.chat( messages=[con], sampling_params=sampling_params, use_tqdm=True)
             responses.append(r[0])
+            break
         responses = [Response.from_spe_decoding_response(response) for response in responses]
     elif args.use_ray:
         responses = fetch_responses_ray(conversations, max_tokens, temp, args)
@@ -723,7 +726,7 @@ def main():
     parser.add_argument(
         "--task",
         type=str,
-        default='aime24',
+        default='math500',
         choices=TASK_NAMES_TO_YAML.keys(),
         help="Task to process.",
     )
