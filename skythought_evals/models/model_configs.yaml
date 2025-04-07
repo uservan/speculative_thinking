@@ -75,3 +75,14 @@ models:
         
   NovaSky-AI/Sky-T1-32B-Flash: 
     system_prompt: *sky_t1_system_prompt
+  
+  bespokelabs/Bespoke-Stratos-7B: 
+    system_prompt: *sky_t1_system_prompt
+  VanWang/Bespoke-Stratos-7B-ThinkPO: 
+    system_prompt: *sky_t1_system_prompt
+  VanWang/DeepSeek-R1-Distill-Qwen-7B-ThinkPO: 
+    system_prompt: *sky_t1_system_prompt
+  deepseek-ai/DeepSeek-R1-Distill-Qwen-7B: 
+    system_prompt: *sky_t1_system_prompt
+  VanWang/Bespoke-7b_baseline:
+    system_prompt: *sky_t1_system_prompt
