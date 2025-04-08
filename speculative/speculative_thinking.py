@@ -12,6 +12,7 @@ import pickle
 import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.qwen_math_parser import *
+from speculative.speculative_vllm_prompt import spe_thinking_vllm_prompt
 from speculative.speculative_vllm import spe_thinking_vllm
 from speculative.speculative_hf import spe_thinking_hf
 from vllm import LLM, SamplingParams
@@ -40,6 +41,8 @@ def load_spe_model(path):
     config = read_yml(path)
     if config['mode'] == 'vllm':
         return spe_thinking_vllm(**config)
+    if config['mode'] == 'vllm_p':
+        return spe_thinking_vllm_prompt(**config)
     if config['mode'] == 'hf':
         return spe_thinking_hf(**config)
     

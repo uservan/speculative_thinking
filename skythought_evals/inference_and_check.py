@@ -842,7 +842,7 @@ def main():
         "--spe_config", type=str, default=None, help="Path to speculative thinking config"
     )
     parser.add_argument(
-        "--draft_model", type=str, default='deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', help="Path to speculative thinking config"
+        "--draft_model", type=str, default=None, help="Path to speculative thinking config"
     )
     parser.add_argument(
         "--num_speculative_tokens", type=int, default=5, help="Path to speculative thinking config"

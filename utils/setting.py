@@ -1,5 +1,5 @@
 import os
-cache_dir = None # '/scratch/pbsjobs/wxy320/huggingface'
+cache_dir = '/scratch/pbsjobs/wxy320/huggingface'
 project_dir = '/home/wxy320/ondemand/program/speculative_thinking'
 hug_token = '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'
 if cache_dir is not None:
